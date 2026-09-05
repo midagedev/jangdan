@@ -48,6 +48,7 @@ const (
 	labelFloor    = 0.3   // 라벨 축소 하한
 	plateBandW    = 6     // 이름판 좌측 밴드 폭(px) — 게이트 2의 검사 밴드와 같은 폭. 페인팅 잔글자를 판색으로 덮는다
 	stepFaceInset = 2     // 스텝 버튼 면 들여쓰기(px, rect 안쪽) — 면은 앱이 그린다(16번 자리가 스크럽으로 지워짐)
+	botDispPad    = 8     // 하단 표시창 라벨 폭 예산 = rect 폭 − 8(베이스 표시창·버튼은 −4 — §12.3)
 )
 
 // 색 계약(스펙 hex 그대로).
@@ -76,6 +77,9 @@ var (
 		{0x44, 0x44, 0x48, 0xFF}, // basslineA (68,68,72)
 		{0x40, 0x40, 0x46, 0xFF}, // basslineB (64,64,70)
 	}
+	// 코드 트랙 띠(§12.3) — RGB는 계약색(colLabel/colLEDOn) 그대로, 알파만 스펙 지정. 새 색 발명이 아니다.
+	colChordEdge = color.NRGBA{0xE8, 0xE2, 0xD2, 89}  // colLabel α0.35 — 셀 외곽선 1px
+	colChordSel  = color.NRGBA{0xFF, 0x9A, 0x3C, 153} // colLEDOn α0.6 — 선택기 현재 값·7th 채움
 )
 
 // 라벨·표시 스케일.
@@ -127,19 +131,24 @@ type ptrState struct {
 }
 
 // bassDisp — 베이스라인 표시창 캐시. 문자열은 값 변화 시에만 재구성한다.
+// B는 노브 접촉 뒤 dispKnobValDur초간 값, 그 뒤 모드 문자열(Bridge.Mode에서 유도).
 type bassDisp struct {
-	knob  int // 그 섹션에서 마지막으로 만진 노브, -1 = 없음
-	val99 int32
-	text  string
-	dirty bool
+	knob    int // 그 섹션에서 마지막으로 만진 노브, -1 = 없음
+	knobT   float64
+	val99   int32
+	modeKey int32 // 캐시된 B 모드 키(mode | dir<<8) — 모드 문자열 재구성 판정
+	text    string
+	dirty   bool
 }
 
-// bottomDisp — 하단 표시창 캐시(BPM·BAR·페이즈).
+// bottomDisp — 하단 표시창 캐시(키·BPM·마디·페이즈 — "Am 120 B3 BUILD").
 type bottomDisp struct {
-	bpm, bar int32
-	phase    uint8
-	text     string
-	dirty    bool
+	key       int32
+	bpm, bar  int32
+	phase     uint8
+	manual    bool
+	text      string
+	dirty     bool
 }
 
 // View — 기기 뷰. New(이미지 있는 제품 경로)과 newView(레이아웃만 — 테스트)로 만든다.
@@ -153,8 +162,8 @@ type View struct {
 
 	secLEDs [2][numBassSecBtns]int // 섹션 버튼 순서(왼→오: saw..patD)의 LED 인덱스, -1 없음
 	fxLEDs  [engine.Steps]int
-	fxPlay  int // play(DROP) 버튼 인덱스
-	fxRec   int // rec(RESUME) 버튼 인덱스
+	fxPlay  int // play(PLAY) 버튼 인덱스
+	fxRec   int // rec(DROP) 버튼 인덱스
 
 	titlePlate    core.Rect
 	hasTitle      bool
@@ -168,6 +177,11 @@ type View struct {
 	scopeRect core.Rect
 	botRect   core.Rect
 
+	chordRect  core.Rect              // 코드 트랙 띠(§12.3)
+	chordCells [engine.ChordBars]core.Rect
+	chord      chordState
+	harmonyOK  bool // 화성 API 래치(chord.go 헤더) — 구 호스트 패닉 1회에 끊긴다
+
 	selPart engine.Part // 16스텝 편집 대상(기본 BassA)
 	mode    editMode
 
@@ -180,9 +194,9 @@ type View struct {
 	rebuilds int
 
 	// 한 프레임 유효 플래그
-	back, drop, resume bool
-	grabID             engine.ParamID
-	grabOK             bool
+	back, drop bool
+	grabID     engine.ParamID
+	grabOK     bool
 
 	// 드로잉 자산 — newView(테스트)에서는 nil. 디코드는 New에서만.
 	panel      *ebiten.Image
@@ -269,7 +283,7 @@ func New(ctx *core.Ctx) (*View, error) {
 
 // newView — 레이아웃만 파싱해 컨트롤 인덱스를 구축한다(이미지 없음 — 유닛 테스트 경로).
 func newView(l *core.DeviceLayout) (*View, error) {
-	v := &View{layout: l, selPart: engine.BassA, fxPlay: -1, fxRec: -1}
+	v := &View{layout: l, selPart: engine.BassA, fxPlay: -1, fxRec: -1, harmonyOK: true}
 	v.disp[0].knob, v.disp[1].knob = -1, -1
 	for s := 0; s < 2; s++ {
 		for j := range v.secLEDs[s] {
@@ -367,6 +381,7 @@ func newView(l *core.DeviceLayout) (*View, error) {
 	}
 	v.scopeRect = l.Scope.Rect
 	v.botRect = l.Display.Rect
+	v.initChord()
 	if err := v.pairLEDs(); err != nil {
 		return nil, err
 	}
@@ -436,7 +451,7 @@ func (v *View) pairLEDs() error {
 
 // Update — 이 프레임의 입력 처리. Cmd 송신은 여기서만 일어난다.
 func (v *View) Update(ctx *core.Ctx) {
-	v.back, v.drop, v.resume, v.grabOK = false, false, false, false
+	v.back, v.drop, v.grabOK = false, false, false
 	v.runSweeps(ctx)
 	for i := range ctx.Pointers {
 		p := &ctx.Pointers[i]
@@ -469,6 +484,8 @@ func (v *View) Update(ctx *core.Ctx) {
 			v.ptrs[i].seen = false
 		}
 	}
+	v.chordIdleClose(ctx.Now)
+	v.cacheChord(ctx)
 	v.cacheDisplays(ctx)
 }
 
@@ -517,10 +534,14 @@ func (v *View) dropPtr(i int) {
 	v.freePtr(i)
 }
 
-// press — 포인터 누름. 히트 우선순위: 노브 > 패드 > 버튼 > 이름판.
+// press — 포인터 누름. 히트 우선순위: 노브 > 패드 > 버튼 > 코드 트랙 띠 > B 표시창 > 이름판.
+// 코드 선택기가 열려 있으면 띠 밖 눌림으로 닫는다(송신 없음) — 눌림의 원래 동작은 계속된다.
 func (v *View) press(ctx *core.Ctx, p *core.Pointer, si int) {
 	st := &v.ptrs[si]
 	st.x0, st.y0, st.t0, st.longFired = p.X, p.Y, ctx.Now, false
+	if v.chord.open && v.chordCellAt(p.X, p.Y) < 0 {
+		v.chord.open = false
+	}
 	if k := v.hitKnob(p.X, p.Y); k >= 0 {
 		st.kind, st.idx = pkKnob, k
 		st.grabVal = v.knobValue(ctx, &v.knobs[k])
@@ -534,6 +555,14 @@ func (v *View) press(ctx *core.Ctx, p *core.Pointer, si int) {
 	st.kind, st.idx = pkNone, -1
 	if b := v.hitButton(p.X, p.Y); b >= 0 {
 		v.pressButton(ctx, b)
+		return
+	}
+	if c := v.chordCellAt(p.X, p.Y); c >= 0 {
+		v.tapChordBand(ctx, c)
+		return
+	}
+	if v.hasDisp[1] && rectHit(v.dispRects[1], p.X, p.Y) {
+		v.tapBassModeDisplay(ctx)
 		return
 	}
 	if v.hasTitle && rectHit(v.titlePlate, p.X, p.Y) {
@@ -583,43 +612,62 @@ func (v *View) release(ctx *core.Ctx, p *core.Pointer, si int) {
 }
 
 // cacheDisplays — 표시창 문자열 캐시. 값이 변화할 때만 재구성한다(rebuilds 카운터).
+// B 표시창: 노브 접촉 뒤 dispKnobValDur초는 파라미터 값, 그 밖에는 모드 문자열(Bridge.Mode).
 func (v *View) cacheDisplays(ctx *core.Ctx) {
 	for s := 0; s < 2; s++ {
 		d := &v.disp[s]
-		if d.knob < 0 {
+		if d.knob >= 0 && (s == 0 || ctx.Now-d.knobT < dispKnobValDur) {
+			kn := &v.knobs[d.knob]
+			val := v.knobValue(ctx, kn)
+			v99 := int32(val*99 + 0.5)
+			if v99 != d.val99 {
+				d.val99 = v99
+				d.knobT = ctx.Now // 값이 계속 움직이는 동안 값 표시 창을 이어 붙인다
+				nm := kn.name
+				if len(nm) > 3 {
+					nm = nm[:3]
+				}
+				b := append(v.scratch[:0], nm...)
+				b = append(b, ' ')
+				b = strconv.AppendInt(b, int64(v99), 10)
+				d.text = string(b) // 재구성 = 할당 — 값 변화 시에만
+				d.dirty = true
+				d.modeKey = -1 // 값 표시 중임을 표시 — 2초 뒤 모드 경로가 재구성을 놓치지 않게
+				v.rebuilds++
+			}
 			continue
 		}
-		kn := &v.knobs[d.knob]
-		val := v.knobValue(ctx, kn)
-		v99 := int32(val*99 + 0.5)
-		if v99 != d.val99 {
-			d.val99 = v99
-			nm := kn.name
-			if len(nm) > 3 {
-				nm = nm[:3]
+		if s == 1 { // 모드 문자열 — 뷰 상태 없이 브리지에서 유도
+			mode, dir := v.bridgeMode(ctx.Bridge, engine.BassB)
+			mk := int32(mode) | int32(dir)<<8
+			if mk != d.modeKey || d.text == "" {
+				d.modeKey = mk
+				d.text = bassModeName(mode, dir)
+				d.dirty = true
+				v.rebuilds++
 			}
-			b := append(v.scratch[:0], nm...)
-			b = append(b, ' ')
-			b = strconv.AppendInt(b, int64(v99), 10)
-			d.text = string(b) // 재구성 = 할당 — 값 변화 시에만
-			d.dirty = true
-			v.rebuilds++
 		}
 	}
+	key := int32(v.bridgeKey(ctx.Bridge))
 	bpm := int32(engine.BPMOf(ctx.Bridge.Param(engine.Tempo)) + 0.5)
 	bar := int32(ctx.Tick.Bar)
 	ph := ctx.Phase & 3
-	if bpm == v.bottom.bpm && bar == v.bottom.bar && ph == v.bottom.phase {
+	man := ctx.ManualLocked
+	if key == v.bottom.key && bpm == v.bottom.bpm && bar == v.bottom.bar && ph == v.bottom.phase && man == v.bottom.manual {
 		return
 	}
-	v.bottom.bpm, v.bottom.bar, v.bottom.phase = bpm, bar, ph
-	b := append(v.scratch[:0], "BPM "...)
+	v.bottom.key, v.bottom.bpm, v.bottom.bar, v.bottom.phase, v.bottom.manual = key, bpm, bar, ph, man
+	b := appendKey(v.scratch[:0], int(key))
+	b = append(b, ' ')
 	b = strconv.AppendInt(b, int64(bpm), 10)
-	b = append(b, asciiSep...)
-	b = append(b, "BAR "...)
+	b = append(b, ' ', 'B')
 	b = strconv.AppendInt(b, int64(bar), 10)
-	b = append(b, asciiSep...)
-	b = append(b, phaseNames[ph]...)
+	b = append(b, ' ')
+	if man {
+		b = append(b, "MANUAL"...)
+	} else {
+		b = append(b, phaseNames[ph]...)
+	}
 	v.bottom.text = string(b)
 	v.bottom.dirty = true
 	v.rebuilds++
@@ -631,10 +679,11 @@ func (v *View) BackTapped() bool { return v.back }
 // JustGrabbed — 이 프레임에 사용자가 새로 잡은 노브(MANUAL 잠금용).
 func (v *View) JustGrabbed() (engine.ParamID, bool) { return v.grabID, v.grabOK }
 
-// ResumeTapped — rec 자리(라벨 RESUME) 탭 — 뷰는 Cmd 없이 보고만.
-func (v *View) ResumeTapped() bool { return v.resume }
+// ResumeTapped — 폐지(§12.3: RESUME은 30초 무접촉 자동). main.go 호환을 남겨 두고
+// 항상 false를 돌려준다(정리는 호스트 라운드).
+func (v *View) ResumeTapped() bool { return false }
 
-// DropTapped — play 자리(라벨 DROP) 탭. Drop Cmd는 뷰가 직접 보낸다.
+// DropTapped — rec 자리(라벨 DROP) 탭. Drop Cmd는 뷰가 직접 보낸다.
 func (v *View) DropTapped() bool { return v.drop }
 
 // mustAsset — 자산 바이트(없으면 빈 슬라이스 → image.Decode가 오류를 내고 New가 그 오류를 돌려준다).

@@ -1,9 +1,10 @@
 // draw.go — 그리기 전부. Draw는 Cmd를 보내지 않는다.
 //
-// 프레임당 드로잉 예산: DrawImage ≤ 120회(패널 1 + 라벨 레이어 1 + 노브 29 + LED 36 +
-// 표시창 3 + 오버레이 ≤ 14), vector 호출 1회(스코프 폴리라인). 정적 라벨·스텝 버튼 면 16개·
-// 이름판 밴드 패치는 첫 프레임에 720×1280 오프스크린 한 장(labelLayer)로 합성해 매 프레임
-// 1회 blit한다(프레임당 추가 비용 0). 옵션·버퍼는 전부 재사용.
+// 프레임당 드로잉 예산: DrawImage ≤ 130회(패널 1 + 라벨 레이어 1 + 노브 29 + LED 36 +
+// 표시창 3 + 오버레이 ≤ 14 + 코드 트랙 띠 채움 ≤ 2·글리프 ≈ 24), vector 호출 1회(스코프
+// 폴리라인). 정적 라벨·스텝 버튼 면 16개·이름판 밴드 패치·코드 트랙 셀 외곽선 8개(1px×4변)
+// 는 첫 프레임에 720×1280 오프스크린 한 장(labelLayer)로 합성해 매 프레임 1회 blit한다
+// (프레임당 추가 비용 0). 옵션·버퍼는 전부 재사용.
 package device
 
 import (
@@ -35,7 +36,7 @@ const (
 	ledOff
 )
 
-// Draw — 패널 → 라벨 → LED → 노브 → 오버레이 → 표시창 → 스코프.
+// Draw — 패널 → 라벨 → LED → 노브 → 오버레이 → 코드 트랙 띠 → 표시창 → 스코프.
 func (v *View) Draw(screen *ebiten.Image, ctx *core.Ctx) {
 	v.ensureLayers(ctx)
 	v.op.GeoM.Reset()
@@ -45,6 +46,7 @@ func (v *View) Draw(screen *ebiten.Image, ctx *core.Ctx) {
 	v.drawLEDs(screen, ctx)
 	v.drawKnobs(screen, ctx)
 	v.drawOverlays(screen, ctx)
+	v.drawChordTrack(screen, ctx)
 	v.drawDisplays(screen, ctx)
 	v.drawScope(screen, ctx)
 }
@@ -79,6 +81,14 @@ func (v *View) ensureLayers(ctx *core.Ctx) {
 		r := b.rect
 		v.fillRect(v.labelLayer, core.Rect{r[0] + stepFaceInset, r[1] + stepFaceInset,
 			r[2] - 2*stepFaceInset, r[3] - 2*stepFaceInset}, colStepFace)
+	}
+	// 코드 트랙 셀 외곽선 8개(1px, colChordEdge α0.35) — 기하가 정적이므로 여기에 베이크.
+	for i := range v.chordCells {
+		r := v.chordCells[i]
+		v.fillRectA(v.labelLayer, core.Rect{r[0], r[1], r[2], 1}, colChordEdge)
+		v.fillRectA(v.labelLayer, core.Rect{r[0], r[1] + r[3] - 1, r[2], 1}, colChordEdge)
+		v.fillRectA(v.labelLayer, core.Rect{r[0], r[1], 1, r[3]}, colChordEdge)
+		v.fillRectA(v.labelLayer, core.Rect{r[0] + r[2] - 1, r[1], 1, r[3]}, colChordEdge)
 	}
 	f := ctx.Font
 	if f == nil {
@@ -144,6 +154,21 @@ func (v *View) fillRect(dst *ebiten.Image, r core.Rect, c color.NRGBA) {
 	v.op.GeoM.Translate(r[0], r[1])
 	v.op.ColorScale.Reset()
 	v.op.ColorScale.Scale(float32(c.R)/255, float32(c.G)/255, float32(c.B)/255, 1)
+	dst.DrawImage(v.white1, &v.op)
+}
+
+// fillRectA — 반투명 단색 사각(코드 트랙 채움·외곽선). overlayRect의 색 일반화:
+// 프리멀티플라이드 흰 1×1을 (r·a, g·a, b·a, a)로 축소해 source-over가 알파를 지키게 한다.
+func (v *View) fillRectA(dst *ebiten.Image, r core.Rect, c color.NRGBA) {
+	if v.white1 == nil {
+		return
+	}
+	a := float32(c.A) / 255
+	v.op.GeoM.Reset()
+	v.op.GeoM.Scale(r[2], r[3])
+	v.op.GeoM.Translate(r[0], r[1])
+	v.op.ColorScale.Reset()
+	v.op.ColorScale.Scale(float32(c.R)/255*a, float32(c.G)/255*a, float32(c.B)/255*a, a)
 	dst.DrawImage(v.white1, &v.op)
 }
 
@@ -266,8 +291,9 @@ func (v *View) spriteFor(r float64) *ebiten.Image {
 	return v.spriteImg[best]
 }
 
-// drawOverlays — 패드 lit(120ms)·뮤트 dim(ColorScale 0.55 상당), Build 중 DROP 펄스,
-// MANUAL 잠금 중 RESUME lit. 반투명 사각 1×1 텍스처 확대(옵션 재사용, 할당 0).
+// drawOverlays — 패드 lit(120ms)·뮤트 dim(ColorScale 0.55 상당), PLAY 상시 lit(재생 중
+// 또는 제스처 전 가짜 시계), Build 페이즈 중 DROP 펄스. 반투명 사각 1×1 텍스처 확대
+// (옵션 재사용, 할당 0). RESUME lit은 폐지(§12.3 — RESUME은 30초 무접촉 자동).
 func (v *View) drawOverlays(screen *ebiten.Image, ctx *core.Ctx) {
 	for i := range v.pads {
 		p := &v.pads[i]
@@ -278,12 +304,45 @@ func (v *View) drawOverlays(screen *ebiten.Image, ctx *core.Ctx) {
 			v.overlayRect(screen, p.rect, v.white1, overlayLitA)
 		}
 	}
-	if v.fxPlay >= 0 && ctx.Phase == 1 {
-		a := float32(overlayLitA + dropPulseAmp*(0.5+0.5*math.Sin(2*math.Pi*dropPulseHz*ctx.Now)))
-		v.overlayRect(screen, v.buttons[v.fxPlay].rect, v.white1, a)
+	if v.fxPlay >= 0 && transportLit(ctx.Tick) {
+		v.overlayRect(screen, v.buttons[v.fxPlay].rect, v.white1, overlayLitA)
 	}
-	if v.fxRec >= 0 && ctx.ManualLocked {
-		v.overlayRect(screen, v.buttons[v.fxRec].rect, v.white1, overlayLitA)
+	if v.fxRec >= 0 && ctx.Phase == 1 {
+		a := float32(overlayLitA + dropPulseAmp*(0.5+0.5*math.Sin(2*math.Pi*dropPulseHz*ctx.Now)))
+		v.overlayRect(screen, v.buttons[v.fxRec].rect, v.white1, a)
+	}
+}
+
+// drawChordTrack — 코드 트랙 띠(§12.3). 보통 상태: 현재 마디 셀 colLEDMid 채움(텍스트 아래) +
+// 캐시된 도수 라벨 8개. 선택기 열림: 같은 띠에 다시 그린다 — 셀 0..6 = 도수 후보(현재 값 셀은
+// colChordSel 채움), 셀 7 = 7th 토글(켜짐이면 채움) + 마디 라벨("B<n> 7"). 외곽선은 labelLayer에
+// 베이크돼 있으므로 여기선 채움 2 + 글리프 ≈ 24만 쓴다.
+func (v *View) drawChordTrack(screen *ebiten.Image, ctx *core.Ctx) {
+	if ctx.Font == nil || v.chordRect[2] <= 0 {
+		return
+	}
+	f := ctx.Font
+	if v.chord.open {
+		deg, flags := v.bridgeChord(ctx.Bridge, v.chord.bar)
+		deg %= engine.NumDegrees
+		v.fillRectA(screen, v.chordCells[deg], colChordSel)
+		for i := 0; i < engine.NumDegrees; i++ {
+			cx, cy := v.chordCells[i].Center()
+			f.Draw(screen, romanDeg[i], cx, cy, labelBtnScale, colLabel, core.AlignCenter)
+		}
+		c7 := v.chordCells[engine.ChordBars-1]
+		if flags&engine.ChordSeventh != 0 {
+			v.fillRectA(screen, c7, colChordSel)
+		}
+		cx, cy := c7.Center()
+		f.Draw(screen, v.chord.barLbl, cx, cy, labelBtnScale, colLabel, core.AlignCenter)
+		return
+	}
+	cur := int(ctx.Tick.Bar) & int(engine.ChordBars-1)
+	v.fillRectA(screen, v.chordCells[cur], colLEDMid)
+	for i := range v.chordCells {
+		cx, cy := v.chordCells[i].Center()
+		f.Draw(screen, v.chord.cells[i].text, cx, cy, labelBtnScale, colLabel, core.AlignCenter)
 	}
 }
 
@@ -313,12 +372,12 @@ func (v *View) drawDisplays(screen *ebiten.Image, ctx *core.Ctx) {
 		if !v.hasDisp[s] {
 			continue
 		}
-		v.blitDisplay(screen, ctx, s, v.dispRects[s], &v.disp[s].text, &v.disp[s].dirty, dispBassScale, colDispWin[s])
+		v.blitDisplay(screen, ctx, s, v.dispRects[s], &v.disp[s].text, &v.disp[s].dirty, dispBassScale, colDispWin[s], labelFitPad)
 	}
-	v.blitDisplay(screen, ctx, 2, v.botRect, &v.bottom.text, &v.bottom.dirty, dispBottomScale, color.NRGBA{})
+	v.blitDisplay(screen, ctx, 2, v.botRect, &v.bottom.text, &v.bottom.dirty, dispBottomScale, color.NRGBA{}, botDispPad)
 }
 
-func (v *View) blitDisplay(screen *ebiten.Image, ctx *core.Ctx, slot int, r core.Rect, text *string, dirty *bool, scale float64, bg color.NRGBA) {
+func (v *View) blitDisplay(screen *ebiten.Image, ctx *core.Ctx, slot int, r core.Rect, text *string, dirty *bool, scale float64, bg color.NRGBA, pad float64) {
 	img := v.dispImg[slot]
 	if img == nil {
 		img = ebiten.NewImage(int(r[2]), int(r[3]))
@@ -333,8 +392,9 @@ func (v *View) blitDisplay(screen *ebiten.Image, ctx *core.Ctx, slot int, r core
 		if *text != "" && ctx.Font != nil {
 			// img은 rect와 같은 크기의 로컬 캔버스 — 스크린 좌표(r.Center)를 넣으면 글줄이
 			// 캔버스 밖에 놓여 아무 것도 안 그려진다(하단 표시창 미표시의 원인). 로컬 중심.
-			// 텍스트 폭은 rect−labelFitPad 안으로 축소(2차 비전 처방 — 창 밖 넘침 방지).
-			sc := labelScale(ctx.Font, *text, scale, r[2]-labelFitPad)
+			// 텍스트 폭은 rect−pad 안으로 축소(2차 비전 처방 — 창 밖 넘침 방지).
+			// 하단 표시창은 botDispPad(8)로 더 좁게 — "Am 120 B3 BUILD"가 창에 맞는다(§12.3).
+			sc := labelScale(ctx.Font, *text, scale, r[2]-pad)
 			ctx.Font.Draw(img, *text, r[2]/2, r[3]/2, sc, colLCD, core.AlignCenter)
 		}
 		*dirty = false

@@ -85,7 +85,8 @@ func (v *View) grabKnob(ctx *core.Ctx, k int) {
 	}
 	if kn.sec <= secBassB {
 		v.disp[kn.sec].knob = k
-		v.disp[kn.sec].val99 = -1 // 다음 cacheDisplays에서 재구성
+		v.disp[kn.sec].knobT = ctx.Now // B 표시창: 노브 접촉 시각(2초 뒤 모드 문자열 복귀)
+		v.disp[kn.sec].val99 = -1      // 다음 cacheDisplays에서 재구성
 	}
 }
 

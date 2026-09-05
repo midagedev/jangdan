@@ -1,6 +1,38 @@
 // device_test.go — 계약↔단언. 헤드리스 렌더가 불가하므로 New(이미지) 없이
 // newView(레이아웃만) + 기록형 fakeBridge로 상태기계를 검증한다.
 // 좌표는 하드코딩하지 않고 레이아웃에서 찾은 컨트롤의 값을 쓴다(JSON이 단일 소유자).
+//
+// — P2 계약↔단언 표(스펙 P2-device, 항목당 단언 ≥ 2) —
+//
+//	계약                                    | 단언
+//	----------------------------------------|----------------------------------------------
+//	play 탭 → Transport A=1/0 토글           | TestTransport: 재생 중 A=0·정지 중 A=1 각 정확히 1개,
+//	                                        |   라벨 "PLAY"·버튼 매핑(newView 실패 시 에러)
+//	rec 탭 → Drop + DropTapped 1프레임       | TestTransport: Drop 정확히 1개 + 플래그 1프레임 수명,
+//	                                        |   라벨 "DROP"
+//	ResumeTapped 폐지(항상 false)            | TestTransport: 탭 프레임·다음 프레임 둘 다 false
+//	코드 띠 8셀 균등·간격 3                   | TestChordBandLayout: 셀 수·동폭, 끝 정렬(마지막 셀 = 띠 끝)
+//	셀 탭 → 선택기(같은 띠) 열림·무송신       | TestChordSelector: 열림 프레임 Cmd 0개, bar = 셀
+//	도수 탭 → SetChord 1개 후 닫힘           | TestChordSelector: {A:bar,B:deg,C:flags} 정확히 1개·닫힘
+//	셀 7 = 7th 토글(열림 유지)               | TestChordSeventhToggle: C 플래그 XOR 송신 2회·도수 보존·열림
+//	밖 탭 / 6초 무조작 → 닫힘(무송신)         | TestChordSelectorClose: 빈 판 (360,615) 탭·5s 열림→6.5s 닫힘
+//	라벨 = 도수 로마자(+7)·입력 방어 deg%7    | TestChordLabels: "iv"/"iv7"/deg 10→"iv", 값 불변 시 재구성 0
+//	B 표시창 탭 → 모드 순환 5단계             | TestBassModeCycle: (1,0)→(1,1)→(1,2)→(2,0)→(0,0) 전체 순서,
+//	                                        |   nextBassMode(7,9) 범위 밖 정규화
+//	B 표시창: 노브 값 2초 → 모드 문자열       | TestBassModeDisplayWindow: "CUT 35"→2초 후 "BASS" 복귀
+//	하단 = "Am 120 B3 BUILD" 포맷            | TestBottomDisplay: 키·BPM·마디·페이즈 전부 + MANUAL 치환
+//	정상 상태 Update 힙 할당 0                | TestUpdateSteadyNoAlloc: AllocsPerRun 200프레임 == 0,
+//	                                        |   TestChordLabels/TestDisplayCache의 재구성 카운터
+//	화성 API 구 브리지 호환(패닉 래치)        | TestHarmonyGuard: Chord 패닉 브리지에서 무크래시·래치·기본값,
+//	                                        |   이후 Chord 실호출 없음(카운터 1 고정)
+//
+// FAIL-first(구현 전 소스에서 실측, 2026-09-06):
+//   go test ./app/view/device/ -run 'TestTransport|TestDisplayCache' -count=1
+//   → --- FAIL: TestTransport — play 탭(재생 중)이 Transport가 아니라 Drop(Kind 6) 송신
+//   → --- FAIL: TestDisplayCache — 하단 표시창이 구식 "BPM 130 - BAR 0 - INTRO" 포맷
+//   (신규 테스트 6종은 구현과 동시에 도입되어 구소스에서의 적색은 위 두 간접 증거로 대신한다.)
+//   구 브리지 패닉(가드 도입 동기): 캡처 MANIFEST 로그 — jsBridge.Chord가 "property chord
+//   is not a function" 패닉으로 Go program exited → 가드 적용 후 캡처 정상 완주.
 package device
 
 import (
@@ -12,7 +44,7 @@ import (
 	"github.com/midagedev/revirth/engine"
 )
 
-// fakeBridge — 기록형 브리지: 보낸 Cmd(시각 포함)와 파라미터·스텝·뮤트 미러.
+// fakeBridge — 기록형 브리지: 보낸 Cmd(시각 포함)와 파라미터·스텝·뮤트·화성 미러.
 type fakeBridge struct {
 	cmds   []recCmd
 	params [engine.NumParams]float32
@@ -20,6 +52,9 @@ type fakeBridge struct {
 	drum   [6][engine.Steps]uint8
 	muted  [engine.NumParts]bool
 	slot   [2]uint8
+	key    int
+	chord  [engine.ChordBars][2]uint8 // [deg, flags]
+	mode   [2][2]uint8                 // [mode, dir] — 파트 A/B
 	now    float64
 	tick   core.Tick
 }
@@ -56,10 +91,16 @@ func (f *fakeBridge) BassStep(p engine.Part, step int) (uint8, uint8) {
 func (f *fakeBridge) DrumStep(p engine.Part, step int) uint8 { return f.drum[p-2][step] }
 func (f *fakeBridge) Muted(p engine.Part) bool               { return f.muted[p] }
 func (f *fakeBridge) Slot(p engine.Part) uint8               { return f.slot[p] }
-func (f *fakeBridge) KeyRoot() int                           { return 0 }
-func (f *fakeBridge) Chord(bar int) (uint8, uint8)           { return 0, 0 }
-func (f *fakeBridge) Mode(p engine.Part) (uint8, uint8)      { return 0, 0 }
-func (f *fakeBridge) Hint(int)                               {}
+func (f *fakeBridge) KeyRoot() int                           { return f.key }
+func (f *fakeBridge) Chord(bar int) (uint8, uint8) {
+	c := f.chord[bar&(engine.ChordBars-1)]
+	return c[0], c[1]
+}
+func (f *fakeBridge) Mode(p engine.Part) (uint8, uint8) {
+	m := f.mode[p&1]
+	return m[0], m[1]
+}
+func (f *fakeBridge) Hint(int) {}
 
 func (f *fakeBridge) Cmd(c engine.Cmd, a core.Author) {
 	f.cmds = append(f.cmds, recCmd{c, f.now, a})
@@ -84,6 +125,12 @@ func (f *fakeBridge) Cmd(c engine.Cmd, a core.Author) {
 		if c.A < uint8(engine.NumParts) {
 			f.muted[c.A] = c.B != 0
 		}
+	case engine.SetKey:
+		f.key = int(c.A % engine.NumKeys)
+	case engine.SetChord:
+		f.chord[c.A&uint8(engine.ChordBars-1)] = [2]uint8{c.B, c.C}
+	case engine.BassMode:
+		f.mode[c.A&1] = [2]uint8{c.B, c.C}
 	}
 }
 
@@ -113,6 +160,7 @@ func (h *harness) frame(ptrs ...core.Pointer) {
 	h.ctx.DT = h.dt
 	h.ctx.Now += h.dt
 	h.ctx.Pointers = ptrs
+	h.ctx.Tick = h.fb.tick // 제품 경로와 동일: main.go가 매 프레임 Bridge.Tick()으로 채운다
 	h.fb.now = h.ctx.Now
 	h.v.Update(h.ctx)
 	h.ctx.Pointers = nil
@@ -517,33 +565,57 @@ func TestPads(t *testing.T) {
 	}
 }
 
-// — 계약↔단언: 한 프레임 플래그 —
+// — 계약↔단언: 트랜스포트(PLAY/STOP·DROP — §12.3) —
 
-func TestFrameFlags(t *testing.T) {
+func TestTransport(t *testing.T) {
 	h := newHarness(t)
+	// play = PLAY/STOP 토글: 재생 중 탭 → Transport A=0(정지) 정확히 1개.
+	h.fb.tick.Playing = true
 	pressButton(h, btnAt(h.v, secFx, "play"))
-	if !h.v.DropTapped() {
-		t.Fatal("play 탭 프레임에 DropTapped false")
+	if len(h.fb.cmds) != 1 || h.fb.cmds[0].c.Kind != engine.Transport || h.fb.cmds[0].c.A != 0 {
+		t.Fatalf("play 탭(재생 중) → %+v(Transport A=0 1개 예상)", h.fb.cmds)
 	}
-	if c, _ := lastCmd(h); c.Kind != engine.Drop {
-		t.Fatalf("play → %+v(Drop 예상)", c)
+	// 정지 중 탭 → A=1(재생).
+	h.fb.tick.Playing = false
+	h.fb.cmds = nil
+	pressButton(h, btnAt(h.v, secFx, "play"))
+	if len(h.fb.cmds) != 1 || h.fb.cmds[0].c.Kind != engine.Transport || h.fb.cmds[0].c.A != 1 {
+		t.Fatalf("play 탭(정지 중) → %+v(Transport A=1 1개 예상)", h.fb.cmds)
+	}
+	// rec = DROP: Cmd 1개 + DropTapped 1프레임.
+	h.fb.cmds = nil
+	pressButton(h, btnAt(h.v, secFx, "rec"))
+	if len(h.fb.cmds) != 1 || h.fb.cmds[0].c.Kind != engine.Drop {
+		t.Fatalf("rec 탭 → %+v(Drop 1개 예상)", h.fb.cmds)
+	}
+	if !h.v.DropTapped() {
+		t.Fatal("rec 탭 프레임에 DropTapped false")
 	}
 	h.frame()
 	if h.v.DropTapped() {
 		t.Fatal("다음 프레임에 DropTapped 잔존")
 	}
-	n := len(h.fb.cmds)
-	pressButton(h, btnAt(h.v, secFx, "rec"))
-	if !h.v.ResumeTapped() {
-		t.Fatal("rec 탭 프레임에 ResumeTapped false")
-	}
-	if len(h.fb.cmds) != n {
-		t.Fatal("rec 탭이 Cmd를 보냄(보고만 해야)")
+	// RESUME 폐지: 어떤 탭 이후에도 ResumeTapped false.
+	if h.v.ResumeTapped() {
+		t.Fatal("rec 탭 프레임에 ResumeTapped true(폐지 예상)")
 	}
 	h.frame()
 	if h.v.ResumeTapped() {
 		t.Fatal("다음 프레임에 ResumeTapped 잔존")
 	}
+	// 라벨: play "PLAY", rec "DROP".
+	if b := btnAt(h.v, secFx, "play"); b.label != "PLAY" {
+		t.Fatalf("play 라벨 %q(PLAY 예상)", b.label)
+	}
+	if b := btnAt(h.v, secFx, "rec"); b.label != "DROP" {
+		t.Fatalf("rec 라벨 %q(DROP 예상)", b.label)
+	}
+}
+
+// — 계약↔단언: 한 프레임 플래그 —
+
+func TestFrameFlags(t *testing.T) {
+	h := newHarness(t)
 	cx, cy := h.v.titlePlate.Center()
 	h.frame(ptrPress(-1, cx, cy))
 	if !h.v.BackTapped() {
@@ -552,6 +624,341 @@ func TestFrameFlags(t *testing.T) {
 	h.frame()
 	if h.v.BackTapped() {
 		t.Fatal("다음 프레임에 BackTapped 잔존")
+	}
+}
+
+// — 계약↔단언: 코드 트랙 띠(§12.3) —
+
+// tapCell — 코드 띠 셀 i의 중심 탭(1프레임).
+func tapCell(h *harness, i int) {
+	cx, cy := h.v.chordCells[i].Center()
+	h.frame(ptrPress(-1, cx, cy))
+}
+
+// countChordCmds — SetChord 송신 수.
+func countChordCmds(h *harness) int {
+	n := 0
+	for _, r := range h.fb.cmds {
+		if r.c.Kind == engine.SetChord {
+			n++
+		}
+	}
+	return n
+}
+
+func TestChordBandLayout(t *testing.T) {
+	h := newHarness(t)
+	if n := len(h.v.chordCells); n != engine.ChordBars {
+		t.Fatalf("셀 %d개(8 예상)", n)
+	}
+	w := h.v.chordCells[0][2]
+	for i, c := range h.v.chordCells {
+		if c[2] != w {
+			t.Fatalf("셀 %d 폭 %v(동폭 %v 예상)", i, c[2], w)
+		}
+		if c[3] != h.v.chordRect[3] || c[1] != h.v.chordRect[1] {
+			t.Fatalf("셀 %d 높이/세로 위치가 띠와 다름", i)
+		}
+	}
+	// 간격 = chordGap(3): 피치(셀 시작 간 거리) − 셀폭.
+	pitch := h.v.chordCells[1][0] - h.v.chordCells[0][0]
+	if d := math.Abs(pitch - w - chordGap); d > 1e-9 {
+		t.Fatalf("셀 간격 %v(3 예상)", pitch-w)
+	}
+	// 끝 정렬: 첫 셀이 띠 왼쪽에, 마지막 셀 오른쪽이 띠 오른쪽에 정확히 닿는다.
+	last := h.v.chordCells[engine.ChordBars-1]
+	if h.v.chordCells[0][0] != h.v.chordRect[0] ||
+		math.Abs(last[0]+last[2]-(h.v.chordRect[0]+h.v.chordRect[2])) > 1e-9 {
+		t.Fatal("띠 양 끝 정렬 안 됨")
+	}
+	// 히트: 셀 중심은 자기 인덱스, 띠 밖은 -1.
+	for i, c := range h.v.chordCells {
+		cx, cy := c.Center()
+		if got := h.v.chordCellAt(cx, cy); got != i {
+			t.Fatalf("chordCellAt(셀 %d 중심) = %d", i, got)
+		}
+	}
+	if got := h.v.chordCellAt(h.v.chordRect[0]-1, h.v.chordRect[1]+1); got != -1 {
+		t.Fatalf("띠 밖 히트 %d(-1 예상)", got)
+	}
+}
+
+func TestChordSelector(t *testing.T) {
+	h := newHarness(t)
+	h.fb.chord[5] = [2]uint8{3, 0}
+	// 셀 탭 → 선택기 열림(무송신), 대상 마디 = 셀.
+	tapCell(h, 5)
+	if !h.v.chord.open || h.v.chord.bar != 5 {
+		t.Fatalf("셀 5 탭 후 선택기 (%v, bar %d)", h.v.chord.open, h.v.chord.bar)
+	}
+	if len(h.fb.cmds) != 0 {
+		t.Fatalf("열림 프레임 송신 %d개(0 예상)", len(h.fb.cmds))
+	}
+	// 도수 셀 탭 → SetChord{A:bar, B:deg, C:flags} 정확히 1개 + 닫힘.
+	tapCell(h, 2)
+	if n := countChordCmds(h); n != 1 {
+		t.Fatalf("도수 탭 SetChord %d개(1 예상)", n)
+	}
+	c := h.fb.cmds[len(h.fb.cmds)-1].c
+	if c.Kind != engine.SetChord || c.A != 5 || c.B != 2 || c.C != 0 {
+		t.Fatalf("SetChord = %+v({A:5 B:2 C:0} 예상)", c)
+	}
+	if h.v.chord.open {
+		t.Fatal("도수 확정 후 선택기 열려 있음")
+	}
+	if h.fb.chord[5] != [2]uint8{2, 0} {
+		t.Fatalf("미러 갱신 안 됨: %+v", h.fb.chord[5])
+	}
+}
+
+func TestChordSeventhToggle(t *testing.T) {
+	h := newHarness(t)
+	h.fb.chord[5] = [2]uint8{3, 0}
+	tapCell(h, 5) // 열림
+	tapCell(h, 7) // 7th on → flags 0^1 = 1
+	if n := countChordCmds(h); n != 1 {
+		t.Fatalf("7th 탭 SetChord %d개(1 예상)", n)
+	}
+	c := h.fb.cmds[len(h.fb.cmds)-1].c
+	if c.Kind != engine.SetChord || c.A != 5 || c.B != 3 || c.C != engine.ChordSeventh {
+		t.Fatalf("7th on = %+v({A:5 B:3 C:1} 예상)", c)
+	}
+	if !h.v.chord.open {
+		t.Fatal("7th 탭 후 선택기 닫힘(열림 유지 예상)")
+	}
+	tapCell(h, 7) // 7th off → flags 1^1 = 0
+	if n := countChordCmds(h); n != 2 {
+		t.Fatalf("7th 재탭 누적 SetChord %d개(2 예상)", n)
+	}
+	c = h.fb.cmds[len(h.fb.cmds)-1].c
+	if c.B != 3 || c.C != 0 {
+		t.Fatalf("7th off = %+v(도수 3·플래그 0 예상)", c)
+	}
+	if !h.v.chord.open {
+		t.Fatal("7th 재탭 후 선택기 닫힘")
+	}
+}
+
+func TestChordSelectorClose(t *testing.T) {
+	h := newHarness(t)
+	tapCell(h, 3) // 열림
+	if !h.v.chord.open {
+		t.Fatal("선택기 안 열림")
+	}
+	// 띠 밖(빈 판 — 이름판 638·버튼 행 584 사이) 탭 → 닫힘, 무송신, 눌림은 원래 동작 계속.
+	h.frame(ptrPress(-1, 360, 615))
+	if h.v.chord.open {
+		t.Fatal("밖 탭 후 선택기 열려 있음")
+	}
+	if len(h.fb.cmds) != 0 {
+		t.Fatalf("밖 탭 송신 %d개(0 예상)", len(h.fb.cmds))
+	}
+	// 6초 무조작: 5초까지 열림, 6.5초에 닫힘(송신 없음).
+	tapCell(h, 3)
+	h.run(300) // 5.0s
+	if !h.v.chord.open {
+		t.Fatal("5초 무조작에 닫힘(6초 예상)")
+	}
+	h.run(90) // 누적 6.5s
+	if h.v.chord.open {
+		t.Fatal("6.5초 무조작에도 열려 있음")
+	}
+	if n := countChordCmds(h); n != 0 {
+		t.Fatalf("무조작 닫힘 송신 %d개(0 예상)", n)
+	}
+}
+
+func TestChordLabels(t *testing.T) {
+	h := newHarness(t)
+	h.fb.chord[2] = [2]uint8{3, 0} // 도수 3 → "iv"
+	h.frame()
+	if got := h.v.chord.cells[2].text; got != "iv" {
+		t.Fatalf("도수 3 라벨 %q(iv 예상)", got)
+	}
+	h.fb.chord[2] = [2]uint8{3, engine.ChordSeventh}
+	h.frame()
+	if got := h.v.chord.cells[2].text; got != "iv7" {
+		t.Fatalf("도수 3 + 7th 라벨 %q(iv7 예상)", got)
+	}
+	// 입력 방어: 범위 밖 도수 10은 10%7 = 3으로 그린다("?" 아님).
+	h.fb.chord[4] = [2]uint8{10, 0}
+	h.frame()
+	if got := h.v.chord.cells[4].text; got != "iv" {
+		t.Fatalf("도수 10 라벨 %q(deg%%7 = iv 예상)", got)
+	}
+	// 캐시 계약: 값 불변 프레임 재구성 0, 변화 시 정확히 1.
+	base := h.v.rebuilds
+	h.run(60)
+	if h.v.rebuilds != base {
+		t.Fatalf("값 불변 60프레임 재구성 %d회(0 예상)", h.v.rebuilds-base)
+	}
+	h.fb.chord[6] = [2]uint8{2, 0}
+	h.frame()
+	if h.v.rebuilds != base+1 {
+		t.Fatalf("셀 1개 변화 재구성 %d회(1 예상)", h.v.rebuilds-base)
+	}
+	if got := h.v.chord.cells[6].text; got != "III" {
+		t.Fatalf("도수 2 라벨 %q(III 예상)", got)
+	}
+}
+
+// panicBridge — 화성 API(Chord/Mode/KeyRoot)가 패닉나는 브리지 — 구 호스트(P2 이전
+// host.js, jsBridge.Chord의 "property chord is not a function") 재현. 나머지는 fakeBridge 위임.
+type panicBridge struct {
+	*fakeBridge
+	chordCalls int
+}
+
+func (p *panicBridge) Chord(int) (uint8, uint8) { p.chordCalls++; panic("chord is not a function") }
+func (p *panicBridge) Mode(engine.Part) (uint8, uint8) { panic("mode is not a function") }
+func (p *panicBridge) KeyRoot() int                    { panic("keyRoot is not a function") }
+
+// TestHarmonyGuard — 구 브리지에서 기기 뷰가 죽지 않는다: 첫 패닉을 래치하고 기본값
+// (도수 0 "i"·모드 BASS·키 C)으로 동작, 이후 화성 읽기는 브리지를 다시 부르지 않는다.
+func TestHarmonyGuard(t *testing.T) {
+	h := newHarness(t)
+	pb := &panicBridge{fakeBridge: h.fb}
+	h.ctx.Bridge = pb
+	h.frame() // 패닉이 뷰 밖으로 새면 테스트 프로세스 자체가 죽는다(그것이 게이트)
+	if h.v.harmonyOK {
+		t.Fatal("패닉 후 harmonyOK 잔존")
+	}
+	if got := h.v.chord.cells[0].text; got != "i" {
+		t.Fatalf("기본 도수 라벨 %q(i 예상)", got)
+	}
+	if got := h.v.disp[1].text; got != "BASS" {
+		t.Fatalf("기본 모드 문자열 %q(BASS 예상)", got)
+	}
+	if got := h.v.bottom.text; got != "Cm 130 B0 INTRO" {
+		t.Fatalf("기본 하단 표시창 %q(Cm 130 B0 INTRO 예상)", got)
+	}
+	// 래치 뒤 상호작용: 선택기·모드 순환도 무패닉, Chord 실호출은 최초 1회뿐.
+	tapCell(h, 5)
+	tapCell(h, 2) // SetChord 송신(미러는 fakeBridge가 흡수)
+	if n := countChordCmds(h); n != 1 {
+		t.Fatalf("구 브리지에서도 SetChord %d개(1 예상)", n)
+	}
+	if pb.chordCalls != 1 {
+		t.Fatalf("Chord 실호출 %d회(래치 뒤 재호출 없이 1 고정 예상)", pb.chordCalls)
+	}
+}
+
+// — 계약↔단언: B 모드 순환·표시창(§12.3) —
+
+func TestBassModeCycle(t *testing.T) {
+	h := newHarness(t)
+	cx, cy := h.v.dispRects[1].Center()
+	// BASS에서 5탭: (1,0) → (1,1) → (1,2) → (2,0) → (0,0). A는 항상 파트 B(1).
+	want := [5][2]uint8{{engine.ModeArp, engine.DirUp}, {engine.ModeArp, engine.DirDown},
+		{engine.ModeArp, engine.DirUpDown}, {engine.ModeChord, engine.DirUp}, {engine.ModeBass, engine.DirUp}}
+	h.frame(ptrPress(-1, cx, cy))
+	if got := h.v.disp[1].text; got != "ARP UP" {
+		t.Fatalf("1탭 후 B 표시창 %q(ARP UP 예상)", got)
+	}
+	for i := 1; i < 5; i++ {
+		h.frame(ptrPress(-1, cx, cy))
+	}
+	var got [][2]uint8
+	for _, r := range h.fb.cmds {
+		if r.c.Kind == engine.BassMode {
+			if r.c.A != uint8(engine.BassB) {
+				t.Fatalf("BassMode A = %d(파트 B 예상)", r.c.A)
+			}
+			got = append(got, [2]uint8{r.c.B, r.c.C})
+		}
+	}
+	if len(got) != 5 {
+		t.Fatalf("BassMode 송신 %d개(5 예상)", len(got))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("%d번째 탭 (%d,%d), (%d,%d) 예상", i+1, got[i][0], got[i][1], want[i][0], want[i][1])
+		}
+	}
+	if got := h.v.disp[1].text; got != "BASS" {
+		t.Fatalf("5탭 후 B 표시창 %q(BASS 예상)", got)
+	}
+	// 범위 밖 mode·dir은 나머지로 정규화: (7,9) ≡ (Arp,Up) → 다음은 (Arp,Down).
+	if m, d := nextBassMode(7, 9); m != engine.ModeArp || d != engine.DirDown {
+		t.Fatalf("nextBassMode(7,9) = (%d,%d)((%d,%d) 예상)", m, d, engine.ModeArp, engine.DirDown)
+	}
+	// 모드 문자열 5종 전부.
+	for _, c := range []struct {
+		m, d uint8
+		want string
+	}{{0, 0, "BASS"}, {1, 0, "ARP UP"}, {1, 1, "ARP DN"}, {1, 2, "ARP UD"}, {2, 0, "CHORD"}} {
+		if got := bassModeName(c.m, c.d); got != c.want {
+			t.Fatalf("bassModeName(%d,%d) = %q(%q 예상)", c.m, c.d, got, c.want)
+		}
+	}
+}
+
+func TestBassModeDisplayWindow(t *testing.T) {
+	h := newHarness(t)
+	h.frame()
+	if got := h.v.disp[1].text; got != "BASS" {
+		t.Fatalf("초기 B 표시창 %q(BASS 예상)", got)
+	}
+	// B 섹션 노브 접촉 → 값 표시(CUTOFF 기본 0.35 → "CUT 35").
+	k := knobAt(h.v, secBassB, "CUTOFF")
+	h.frame(ptrPress(-1, k.cx, k.cy))
+	if got := h.v.disp[1].text; got != "CUT 35" {
+		t.Fatalf("노브 접촉 직후 B 표시창 %q(CUT 35 예상)", got)
+	}
+	// 1초 유지(값 불변) — 여전히 값.
+	h.hold(-1, k.cx, k.cy, 60)
+	if got := h.v.disp[1].text; got != "CUT 35" {
+		t.Fatalf("1초 후 B 표시창 %q(CUT 35 유지 예상)", got)
+	}
+	// 2초 경과 — 모드 문자열 복귀(값이 안 움직이면 knobT가 이어붙지 않는다).
+	h.hold(-1, k.cx, k.cy, 150)
+	if got := h.v.disp[1].text; got != "BASS" {
+		t.Fatalf("3.5초 후 B 표시창 %q(BASS 복귀 예상)", got)
+	}
+}
+
+// — 계약↔단언: 하단 표시창("Am 120 B3 BUILD" 포맷 — §12.3) —
+
+func TestBottomDisplay(t *testing.T) {
+	h := newHarness(t)
+	h.fb.key = 9                      // A
+	h.fb.params[engine.Tempo] = float32(1.0 / 3.0) // BPMOf = 100+60/3 = 120
+	h.fb.tick.Bar = 3
+	h.ctx.Phase = 1 // Build
+	h.frame()
+	if got := h.v.bottom.text; got != "Am 120 B3 BUILD" {
+		t.Fatalf("하단 표시창 %q(Am 120 B3 BUILD 예상)", got)
+	}
+	// MANUAL 잠금 중 페이즈 이름 치환.
+	h.ctx.ManualLocked = true
+	h.frame()
+	if got := h.v.bottom.text; got != "Am 120 B3 MANUAL" {
+		t.Fatalf("잠금 중 하단 표시창 %q(Am 120 B3 MANUAL 예상)", got)
+	}
+	// 키 변화: 11 = B.
+	h.ctx.ManualLocked = false
+	h.fb.key = 11
+	h.frame()
+	if got := h.v.bottom.text; got != "Bm 120 B3 BUILD" {
+		t.Fatalf("키 B 하단 표시창 %q(Bm 120 B3 BUILD 예상)", got)
+	}
+	// 키 정규화: appendKey는 12로 나머지(13 → 1 = C#).
+	if b := appendKey(nil, 13); string(b) != "C#m" {
+		t.Fatalf("appendKey(13) = %q(C#m 예상)", b)
+	}
+}
+
+// — 계약↔단언: 정상 상태 할당 0 —
+
+func TestUpdateSteadyNoAlloc(t *testing.T) {
+	h := newHarness(t)
+	h.fb.key = 9
+	h.fb.tick.Bar = 3
+	h.ctx.Phase = 1
+	h.run(120) // 워밍업 — 문자열 캐시 전부 1회 구성
+	allocs := testing.AllocsPerRun(200, func() { h.v.Update(h.ctx) })
+	if allocs != 0 {
+		t.Fatalf("정상 상태 Update 힙 할당 %.0f회/프레임(0 예상)", allocs)
 	}
 }
 
@@ -564,8 +971,8 @@ func TestDisplayCache(t *testing.T) {
 	if h.v.disp[0].text != "TUN 50" {
 		t.Fatalf("표시창 %q(TUN 50 예상)", h.v.disp[0].text)
 	}
-	if h.v.bottom.text != "BPM 130"+asciiSep+"BAR 0"+asciiSep+"INTRO" {
-		t.Fatalf("하단 표시창 %q", h.v.bottom.text)
+	if h.v.bottom.text != "Cm 130 B0 INTRO" {
+		t.Fatalf("하단 표시창 %q(Cm 130 B0 INTRO 예상)", h.v.bottom.text)
 	}
 	base := h.v.rebuilds
 	for i := 0; i < 100; i++ {

@@ -81,9 +81,9 @@ func buttonLabel(name string, kind btnKind, arg int) string {
 	case bkStep:
 		return strconv.Itoa(arg + 1)
 	case bkPlay:
-		return "DROP"
+		return "PLAY"
 	case bkRec:
-		return "RESUME"
+		return "DROP"
 	}
 	switch name {
 	case "saw":
@@ -110,8 +110,13 @@ func bassParam(sec uint8) engine.ParamID {
 	return engine.BassAParams
 }
 
+// transportLit — PLAY 버튼 lit 판정: 재생 중이거나 제스처 전(가짜 시계로 시각적으로
+// 도는 중 — §12.3). 순수 함수(단언 대상).
+func transportLit(t core.Tick) bool { return t.Playing || !t.Started }
+
 // pressButton — 버튼 누름. saw/sqr→BWave, slide/acc→편집 모드 토글,
-// oct→BOct 3단, pat→SelectPattern, step→선택 파트 편집, play→Drop, rec→RESUME 보고.
+// oct→BOct 3단, pat→SelectPattern, step→선택 파트 편집, play→Transport(PLAY/STOP 토글),
+// rec→Drop(+DropTapped 1프레임).
 func (v *View) pressButton(ctx *core.Ctx, i int) {
 	b := &v.buttons[i]
 	switch b.kind {
@@ -160,10 +165,14 @@ func (v *View) pressButton(ctx *core.Ctx, i int) {
 	case bkStep:
 		v.tapStep(ctx, b.arg)
 	case bkPlay:
+		a := uint8(1) // 정지 중 → 재생
+		if ctx.Tick.Playing {
+			a = 0 // 재생 중 → 정지
+		}
+		ctx.Bridge.Cmd(engine.Cmd{Kind: engine.Transport, A: a}, core.Human)
+	case bkRec:
 		ctx.Bridge.Cmd(engine.Cmd{Kind: engine.Drop}, core.Human)
 		v.drop = true
-	case bkRec:
-		v.resume = true
 	}
 }
 
