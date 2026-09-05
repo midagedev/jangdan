@@ -8,9 +8,10 @@
 // 시간은 Input.Now로만 들어온다(벽시계 참조 금지). engine/의 TinyGo 제약(math 금지·
 // 무할당)은 여기에 적용되지 않는다(표준 라이브러리 자유, math/rand는 제외).
 //
-// 설계 원칙 — derive-don't-store: 페이즈·포모도로·에너지 사이클은 매 바 Tick에서
-// Input.Now·cfg·seed로부터 유도한다(pomodoro.go·energy.go). 저장 상태는 전이 감지용
-// lastPhase, 슬롯 순환 regenCount, 노브 모델 cur/tgt뿐이다.
+// 설계 원칙 — derive-don't-store: 페이즈·포모도로·에너지 사이클·코드 진행은 매 바 Tick에서
+// Input.Now·cfg·seed로부터 유도한다(pomodoro.go·energy.go·harmony.go). 저장 상태는 전이
+// 감지용 lastPhase, 세션 첫 바 플래그 vibePending·keyPending, 슬롯 순환 regenCount,
+// 노브 모델 cur/tgt뿐이다.
 //
 // Tick 반환 슬라이스는 내부 버퍼 재사용이다 — 호출자는 다음 Tick 전에 즉시 소비
 // (엔진 Apply 또는 복사)해야 한다.
@@ -93,6 +94,7 @@ type Resident struct {
 	cfg  Config
 
 	vibePending bool // 다음 바 경계에 Tempo SetParam 1개(또는 초기 적용)
+	keyPending  bool // 세션 첫 바 경계에 SetKey 1개(harmony.go §12.4)
 
 	now     float64 // Input.Now의 단조 클램프값
 	prevBar uint32  // 직전 Tick의 Input.Bar(Hand 유지 판정)
@@ -139,6 +141,7 @@ func New(seed uint32, vibe Vibe, cfg Config) *Resident {
 		vibe:        vibe,
 		cfg:         normConfig(cfg),
 		vibePending: true,
+		keyPending:  true,
 		buf:         make([]engine.Cmd, 0, 160),
 	}
 	r.cur = engine.DefaultParams()
@@ -187,10 +190,40 @@ func (r *Resident) onBar(in Input) {
 		}
 	}
 
+	// 세션 첫 바: 조성 선언 1개(엔진 초기값 seed%12와 같은 값 — 로그 자기서술).
+	// 화성 잠금 중이면 내지 않는다(플래그는 그대로 소진 — 잠금은 세션 내 영구).
+	if r.keyPending {
+		r.keyPending = false
+		if !r.harmonyLocked {
+			r.emit(engine.Cmd{Kind: engine.SetKey, A: uint8(r.seed % engine.NumKeys)})
+		}
+	}
+
 	ph, cycleSeed, session := r.derive(in.Now)
 	dropEntry := r.seenPhase && ph == Drop && r.lastPhase != Drop
+	bdEntry := r.seenPhase && ph == Breakdown && r.lastPhase != Breakdown
+	introEntry := !r.seenPhase || (ph == Intro && r.lastPhase != Intro)
+	phaseEntry := !r.seenPhase || ph != r.lastPhase
 	r.phase = ph
 	r.energy = phaseEnergy[ph]
+
+	// 화성(§12.4, harmony.go): 잠금 중이면 사람이 소유 — 조성·코드·모드를 내지 않는다.
+	// 방출 순서는 고정(결정론): 코드 트래 → B 모드 → (아래) 패턴 재생성 → Drop.
+	if !r.harmonyLocked {
+		if introEntry {
+			r.emitChordTrack(cycleSeed, false) // 사이클 시작: 진행표 추첨·방출(7th 없이)
+		}
+		if dropEntry {
+			r.emitChordTrack(cycleSeed, true) // 같은 진행을 7th(iv·v·VII)로 재방출
+		}
+		if bdEntry {
+			r.emitChordTrack(cycleSeed, false) // 브레이크다운: 7th 없이 재방출
+		}
+		if phaseEntry { // B 모드는 모든 페이즈 진입 바(첫 바 = 초기 모드 명시 포함)
+			m, d := bassModeFor(ph)
+			r.emit(engine.Cmd{Kind: engine.BassMode, A: 1, B: m, C: d})
+		}
+	}
 
 	// 패턴 재생성: 페이즈 진입 또는 마지막 재생성에서 8바.
 	regen := !r.seenPhase || ph != r.lastPhase || in.Bar-r.lastRegenBar >= 8

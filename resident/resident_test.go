@@ -3,16 +3,21 @@
 //	계약        | 단언 테스트                                | FAIL-first 변이(전부 실측 FAIL 확인)
 //	------------+--------------------------------------------+----------------------------------------------
 //	1 API/버퍼  | TestTickWithoutBarStart, TestHand          | dispatch를 항상 onBar로(패턴 Cmd 누출); Hand 유지 1바→3바
-//	2 생성기    | TestScaleMembership, TestKickSkeleton,     | 생성 노트 +1(스케일 이탈); 골격 12 제거;
-//	            | TestSlotRotation, TestDeterminism          | 슬롯 기저 4→0
+//	2 생성기    | TestKickSkeleton, TestSlotRotation,         | 생성 노트 +1(스케일 이탈 — P2 도수화 전); 골격 12 제거;
+//	            | TestDeterminism                             | 슬롯 기저 4→0
 //	3 에너지    | TestPhaseRatios, TestPhaseDerivation,      | Intro 경계 0.15→0.20(점유 이탈);
 //	            | TestCmdRanges                              | clampNote 해제+옥타브 +24(노트 범위)
 //	4 바이브    | TestVibeTempo                              | Lofi 112→110 BPM
 //	5 포모도로  | TestPomodoroTransitions                    | 강제 Build 16바→1바
 //	6 잠금      | TestLockResume                             | 잠금 스킵 제거(방출 누출)
 //	7 결정론    | TestDeterminism                            | New가 seed 무시(고정 시드)
-//	8 범위/수   | TestCmdRanges, TestSetParamBudget          | 예산 8→9(바당 상한 초과; 테스트는 계약 수치 8과 비교)
+//	8 범위/수  | TestCmdRanges, TestSetParamBudget          | 예산 8→9(바당 상한 초과; 테스트는 계약 수치 8과 비교)
 //	9 금지어    | grep 게이트(검증 명령 참고, 소스에 없음)    |
+//	10 화성     | TestSetKeyOnce, TestChordProgression,        | 구현 전 실측: SetKey 0개·SetChord 0개·
+//	            | TestBassModePhases (harmony_test.go)         | 첫 바 BassMode 0개(2026-09-06 FAIL)
+//	11 도수     | TestResidentDrivesEngine30Min(도수 분포),    | 도수화 전 절대음 분포 실측: 루트 0.030·
+//	            | TestCmdRanges(note ≤ MaxNote)                | 코드톤 0.000·경과음 0.970(n=891, FAIL)
+//	12 화성잠금 | TestHarmonyLock (harmony_test.go)            | 새너티 “화성 Cmd 없음” FAIL(잠금 전)
 //
 // 실산출물: TestResidentDrivesEngine30Min — 30분 Cmd를 engine.New에 실제 Apply하며
 // Render해 NaN 0·peak ≤ 1.0·RMS > 0.01과 페이즈별 평균 RMS 표를 확인한다.
@@ -352,6 +357,18 @@ func TestCmdRanges(t *testing.T) {
 				if c.A > 1 || c.B > 7 {
 					t.Fatalf("SelectPattern 범위 밖: %+v", c)
 				}
+			case engine.SetKey:
+				if c.A >= engine.NumKeys {
+					t.Fatalf("SetKey 루트 %d(≥%d)", c.A, engine.NumKeys)
+				}
+			case engine.SetChord:
+				if c.A >= engine.ChordBars || c.B >= engine.NumDegrees || c.C&^uint8(engine.ChordSeventh) != 0 {
+					t.Fatalf("SetChord 범위 밖: %+v", c)
+				}
+			case engine.BassMode:
+				if c.A != 1 || c.B >= engine.NumModes || c.C >= engine.NumDirs {
+					t.Fatalf("BassMode 범위 밖: %+v", c)
+				}
 			case engine.Drop:
 				// 필드 없음
 			default:
@@ -396,46 +413,6 @@ func TestKickSkeleton(t *testing.T) {
 				t.Fatalf("바 %d: 킥 골격 스텝 %d가 비었다(gate=%v)", bar, st, m)
 			}
 		}
-	}
-}
-
-// ---- 계약 2: 스케일 소속 ----
-
-func TestScaleMembership(t *testing.T) {
-	const seed = uint32(555)
-	barDur := barDurOf(Rush)
-	r := New(seed, Rush, Config{600, 600, 600}) // 단일 세션 → 스케일 고정
-	scale, _, _, _ := sessionRandom(seed, 0)
-	inScale := func(semi int) bool {
-		for _, d := range scales[scale] {
-			if d == semi {
-				return true
-			}
-		}
-		return false
-	}
-	notes := 0
-	for _, tr := range drive(r, 200, barDur) {
-		for _, c := range tr.cmds {
-			if c.Kind != engine.BassStep {
-				continue
-			}
-			notes++
-			root := 12
-			if c.A == 1 {
-				root = 0
-			}
-			semi := (int(c.C) - root) % 12
-			if semi < 0 {
-				semi += 12
-			}
-			if !inScale(semi) {
-				t.Fatalf("파트 %d 노트 %d: 스케일 %d 소속 아님(반음 %d)", c.A, c.C, scale, semi)
-			}
-		}
-	}
-	if notes < 100 {
-		t.Fatalf("검사한 노트 %d개 — 너무 적다", notes)
 	}
 }
 
@@ -656,12 +633,26 @@ func TestResidentDrivesEngine30Min(t *testing.T) {
 	nan := 0
 	peak := float32(0)
 	phaseSeen := [numPhases]bool{}
+	var degRoot, degChord, degPass int // 계약 11: 베이스 A 게이트 스텝 도수 분포
 
 	for b := 0; b < bars; b++ {
 		now := float64(b) * barDur
 		for _, c := range r.Tick(Input{Bar: uint32(b), Step: 0, Now: now, BarStart: true}) {
 			e.Apply(c)
 			applied++
+			if c.Kind == engine.BassStep && c.A == 0 && c.D&engine.StepGate != 0 {
+				if c.C > engine.MaxNote {
+					t.Fatalf("바 %d: 파트 A 노트 %d > MaxNote %d", b, c.C, engine.MaxNote)
+				}
+				switch c.C % 7 {
+				case 0:
+					degRoot++
+				case 2, 4:
+					degChord++
+				default: // 1·3·5·6
+					degPass++
+				}
+			}
 		}
 		ph := r.Phase()
 		phaseSeen[ph] = true
@@ -696,6 +687,26 @@ func TestResidentDrivesEngine30Min(t *testing.T) {
 	rms := math.Sqrt(total / float64(totalN))
 	if rms <= 0.01 {
 		t.Fatalf("전체 RMS %.5f ≤ 0.01", rms)
+	}
+	// 계약 11: 도수 가중 — 루트 0.5·코드톤 0.3·경과음 0.2, 각 ±0.08(계약 수치).
+	degN := degRoot + degChord + degPass
+	if degN < 400 {
+		t.Fatalf("도수 분포 표본 %d개 — 너무 적다", degN)
+	}
+	for _, tc := range []struct {
+		name string
+		got  int
+		want float64
+	}{
+		{"루트", degRoot, 0.5},
+		{"코드톤(2·4)", degChord, 0.3},
+		{"경과음(1·3·5·6)", degPass, 0.2},
+	} {
+		got := float64(tc.got) / float64(degN)
+		if math.Abs(got-tc.want) > 0.08 {
+			t.Fatalf("%s 점유 %.3f(%.1f±0.08 기대, 표본 %d)", tc.name, got, tc.want, degN)
+		}
+		t.Logf("도수 분포 | %s %d/%d = %.3f(기대 %.1f)", tc.name, tc.got, degN, got, tc.want)
 	}
 	t.Logf("전체: %d바 %.1f초, Cmd %d개 적용, 샘플 %d, RMS %.4f, peak %.4f, NaN %d",
 		bars, float64(bars)*barDur, applied, totalN, rms, peak, nan)
