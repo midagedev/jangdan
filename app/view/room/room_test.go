@@ -3,6 +3,17 @@
 // 프레임 로직(state.step)은 이미지 없이 돌므로 전부 순수 Go 단위 테스트다.
 // 좌표는 fixtureLayout이 준다(레이아웃 값에 의존하지 않는 상대 단언만 쓴다).
 // 플래시 게이트 테스트는 FAIL-first로 게이트 배선을 검증한다(보고서에 원본 출력 첨부).
+//
+// 첫 접촉 힌트(P2-host §C) 계약↔단언:
+//
+//	계약                                      | 단언
+//	------------------------------------------|------------------------------------------
+//	시작 전 플레이트 ×0.85, 시작 후 해제        | TestHintPreStart / TestHintAfterStartImmediately
+//	시작 전 기기 rect+12px 라운드 링(굵기 3)    | TestHintPreStart + TestHintRingGeometry(원점·크기)
+//	시작 직후(시작 탭 프레임 포함) 기기 외곽 힌트 | TestHintAfterStartImmediately — 구 규칙(15~60s
+//	                                          |  창 + everTouched)에서 빨강(FAIL-first)
+//	첫 기기 탭에서 즉시 종료                     | TestHintExpiryAndDeviceTap · TestHintDeviceTapRecordedInView
+//	20초 경과 종료                              | TestHintExpiryAndDeviceTap
 package room
 
 import (
@@ -549,5 +560,124 @@ func TestShaderOptionsBindUniforms(t *testing.T) {
 	sh.dustU["Time"] = float32(3)
 	if got, ok := sh.dustShop.Uniforms["Time"].(float32); !ok || got != 3 {
 		t.Fatalf("dustShop.Uniforms가 dustU와 같은 맵이 아니다(Time=%v ok=%v)", got, ok)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// 첫 접촉 힌트(P2-host §C) — 상태 결정은 state.step(이미지 없음)
+
+// TestHintPreStart — 시작 전: 링 켜짐·외곽 힌트 꺼짐·플레이트 감쇠.
+func TestHintPreStart(t *testing.T) {
+	s := newState(fixtureLayout())
+	sig := baseSig()
+	sig.Started = false
+	s.step(sig, 1.0/120)
+	if !s.hintRing {
+		t.Fatal("시작 전 링 없음")
+	}
+	if s.hintDevice {
+		t.Fatal("시작 전 기기 외곽 힌트가 켜짐")
+	}
+	if math.Abs(float64(s.plateDim-plateDimPreStart)) > 1e-6 {
+		t.Fatalf("시작 전 감쇠 = %f, want %f", s.plateDim, plateDimPreStart)
+	}
+	// LED 트래킹 전제: 시작 전에도 스텝 신호가 들어온다(가짜 시계).
+	if s.lastStep != sig.Step {
+		t.Fatalf("lastStep = %d, want 신호 스텝 %d(시작 전 LED 트래킹)", s.lastStep, sig.Step)
+	}
+}
+
+// TestHintAfterStartImmediately — 시작 직후(2초)에 기기 외곽 힌트가 이미 켜져 있어야 한다.
+// FAIL-first: 구 규칙(hintIdle 15~60s 창 + everTouched)에서 이 단언은 빨강이었다 —
+// 시작 탭 프레임의 접촉이 everTouched를 켜고 15초 창 이전이어서 어느 쪽으로도 죽는다.
+func TestHintAfterStartImmediately(t *testing.T) {
+	s := newState(fixtureLayout())
+	sig := baseSig()
+	sig.Now = 0
+	s.step(sig, 1.0/120) // 시작 프레임(시작 탭)
+	sig.Now = 2
+	s.step(sig, 1.0/120)
+	if s.hintRing {
+		t.Fatal("시작 후에도 시작 전 링")
+	}
+	if !s.hintDevice {
+		t.Fatal("시작 2초에 기기 외곽 힌트 없음 — 구 규칙(15~60s+everTouched) 잔여")
+	}
+	if s.plateDim != 1 {
+		t.Fatalf("시작 후 감쇠 = %f, want 1", s.plateDim)
+	}
+}
+
+// TestHintExpiryAndDeviceTap — 20초 경과 종료 + 첫 기기 탭 즉시 종료(나이 무관).
+func TestHintExpiryAndDeviceTap(t *testing.T) {
+	s := newState(fixtureLayout())
+	sig := baseSig()
+	sig.Now = 0
+	s.step(sig, 0)
+	sig.Now = hintAfterStartSec + 0.1
+	s.step(sig, 0)
+	if s.hintDevice {
+		t.Fatal("20초 뒤에도 기기 외곽 힌트")
+	}
+	sig.Now = 5 // 되돌려도(테스트 편의) 탭 전엔 켜져 있어야 한다
+	s.step(sig, 0)
+	if !s.hintDevice {
+		t.Fatal("5초에 힌트 없음(전제)")
+	}
+	s.deviceTapped = true
+	sig.Now = 5.1
+	s.step(sig, 0)
+	if s.hintDevice {
+		t.Fatal("첫 기기 탭 뒤에도 힌트")
+	}
+}
+
+// TestHintDeviceTapRecordedInView — View 레벨: 기기 rect 안 탭이 deviceTapped로 기록되고
+// 다음 스텝에서 외곽 힌트가 꺼진다(감쇠 해제·링 종료도 함께).
+func TestHintDeviceTapRecordedInView(t *testing.T) {
+	v := newTestView(t)
+	dcx, dcy := v.layout.Device.Center()
+	p := core.Pointer{ID: 1, X: dcx, Y: dcy, JustPressed: true, Pressed: true}
+	stepPointer(t, v, p)
+	p2 := core.Pointer{ID: 1, X: dcx, Y: dcy, JustReleased: true}
+	if !stepPointer(t, v, p2) {
+		t.Fatal("기기 탭이 DeviceTapped로 안 잡힘(전제)")
+	}
+	if !v.st.deviceTapped {
+		t.Fatal("첫 기기 탭이 state에 기록 안 됨")
+	}
+	sig := Signals{DT: 1.0 / 120, Now: 1, Started: true, Cutoff: 0.5, Tempo: 0.5, Phase: 1}
+	v.st.step(sig, 1.0/120)
+	if v.st.hintDevice {
+		t.Fatal("기기 탭 뒤 시작되어도 외곽 힌트")
+	}
+	if v.st.hintRing {
+		t.Fatal("Started 뒤에도 시작 전 링")
+	}
+}
+
+// TestHintRingGeometry — 링은 기기 rect를 12px 부풀린 라운드 사각(굵기 3 → 원점 offset 15).
+// 스트로크 **위치**까지 잰다(2026-09-06 적발: 경로가 rect 자체를 그려 부풀린 밴드가 비어
+// 있었다 — pixcheck 휘도 상승 1.4로 발견. 원점·크기만으로는 이미지 패딩이 같아 못 잡는다).
+func TestHintRingGeometry(t *testing.T) {
+	v := newTestView(t)
+	dr := v.layout.Device
+	pad := hintRingInset + hintRingStroke
+	if v.ringImg == nil {
+		t.Fatal("링 이미지 없음")
+	}
+	if math.Abs(v.ringX-(dr[0]-pad)) > 1e-9 || math.Abs(v.ringY-(dr[1]-pad)) > 1e-9 {
+		t.Fatalf("링 원점 = (%f,%f), want rect−(%g) = (%f,%f)", v.ringX, v.ringY, pad, dr[0]-pad, dr[1]-pad)
+	}
+	w, h := v.ringImg.Size()
+	if wantW, wantH := int(dr[2]+2*pad)+1, int(dr[3]+2*pad)+1; w != wantW || h != wantH {
+		t.Fatalf("링 크기 = (%d,%d), want (%d,%d)", w, h, wantW, wantH)
+	}
+	// 위 가장자리 중심: 부풀린 밴드(y = pad−inset = 3)엔 잉크가, rect 가장자리(y = pad)엔 없어야.
+	// 픽셀 판독(At)은 게임 루프 밖에서 패닉(ReadPixels)이라 경로 rect 자체를 게이트한다.
+	want := [4]float64{dr[0] - hintRingInset, dr[1] - hintRingInset,
+		dr[2] + 2*hintRingInset, dr[3] + 2*hintRingInset}
+	if v.ringRect != want {
+		t.Fatalf("링 경로 rect = %v, want 부풀린 rect %v", v.ringRect, want)
 	}
 }

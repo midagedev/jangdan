@@ -32,7 +32,7 @@ new AudioWorkletNode(ctx, 'jd', {
 
 | worklet → main | 뜻 |
 |---|---|
-| `{t:'tick', block, step, bar, flags, peak, ctxTime, applied}` | 4블록마다. flags는 4블록의 `jd_flags()` 누적 OR, peak는 최댓값, ctxTime은 `currentTime`. applied는 큐에서 적용한 누적 명령 수 |
+| `{t:'tick', block, step, bar, flags, peak, ctxTime, applied, playing}` | 4블록마다. flags는 4블록의 `jd_flags()` 누적 OR, peak는 최댓값, ctxTime은 `currentTime`. applied는 큐에서 적용한 누적 명령 수. `playing`은 `jd_playing()`의 0\|1(트랜스포트) — 필드가 없는 구 워클릿은 호스트가 정지로 해석한다 |
 | `{t:'state', id, bytes, block}` | state:get 응답 |
 | `{t:'state:ack', ok}` | state:set 응답 |
 | `{t:'replay:done'}` | 리플레이 렌더 완료 |
@@ -46,6 +46,9 @@ new AudioWorkletNode(ctx, 'jd', {
 - `jd.replaying()` — 리플레이 요청(카운트다운 포함)부터 done까지 true.
 - `jd.markFrames()` — 프레임 계측 구간 리셋(measure.mjs용).
 - `jd.debugStateGet()` → `Promise<{bytes, block}>` — state:get 왕복(measure.mjs 검증용).
+- `jd.debugShadowState()` → `Uint8Array|null` — 섀도 엔진 상태 덤프(measure.mjs 섀도 일치 게이트용).
+- `jd.hint(state)` — 첫 접촉 캡션 표시. `window.JD_CAPTIONS[state]`를 `#caption`에 넣고
+  보이게; 등록 안 된 상태(0 포함)는 숨긴다(입력 방어 — 문구 소유자는 Go main, 상태 1·2·3).
 - `jd.telemetryFlush()` — 텔레메트리 배치를 즉시 전송(반환 Promise\<status 문자열\>).
 
 `author`: 0 Human · 1 Resident · 2 Replay · 3 System(`app/core/core.go` Author와 같은 값).
@@ -61,15 +64,33 @@ Go는 유지)뿐 — 한글·ASCII는 동일. 시드는 `start()` 시점의 `#se
 변경은 새 세션(reset)없이는 엔진에 반영되지 않는다. URL `?seed=단어`는 박스에 미리 채워 넣고
 텔레메트리 `seed_open`을 남긴다(URL 로그 재생은 session 라운드 소유).
 
-### 미러 (워클릿 왕복 없이 동기 읽기)
+### 섀도 엔진 (워클릿 왕복 없이 동기 읽기)
 
-`params[33]`(12비트 양자화 — `quantN(v) = Math.fround(Math.fround(Math.fround(clamp01(v))*4095)+0.5)|0`,
-값은 `Math.fround(n/4095)`; engine `quantize`와 비트 동일 — 4096개 전수 검증됨), 베이스 패턴
-`[2파트][8슬롯][16스텝]`(BassStep은 **현재 슬롯**에 기록 — 엔진 Apply와 같다), 드럼 `[6][16]`,
-뮤트 비트, 슬롯. `SelectPattern`은 다음 바 경계 tick(FlagBar)에 확정 — 엔진의 "다음 바에 적용"과
-같은 의미로의 단순화. **초기값은 `engine/params.go`의 `DefaultParams()` 전사(`DEFAULT_PARAMS`
-배열) — 값 변경은 양쪽 함께.** 리플레이는 키프레임 + 로그 재생으로 같은 제어 상태를 재현하므로
-미러를 별도로 되돌리지 않는다(로그가 정본의 귀결).
+UI 상태 읽기(`param`·`bassStep`·`drumStep`·`muted`·`slot`·`keyRoot`·`chord`·`mode`)는
+**메인 스레드의 두 번째 engine.wasm 인스턴스**(렌더하지 않는 섀도)에서 한다. 페이지 로드 즉시
+`compileStreaming`과 같은 모듈로 `WebAssembly.Instance(module, {})` → `_initialize()` →
+`jd_init(seedFromWord(#seedbox))`를 돌리고:
+
+- `cmd()`는 워클릿 발송과 함께 섀도에도 **즉시** 적용(`jd_cmd`). 섀도 초기화 전 도착한 cmd는
+  `pendingShadow`에 쌓아 `initShadow` 직후 재생한다(초기화 경쟁으로 인한 적용 누락 봉쇄).
+- 바 경계 대기값(SelectPattern·SetKey)은 **FLAG_BAR tick마다 `jd_sync()`** 로 확정 — 엔진의
+  "다음 바에 적용"과 같은 의미. `jd_sync` 내보출이 없는 engine.wasm에서는 건너뛴다(입력 방어).
+- **`shadowReset(seed)`이 리셋 경로의 단일 소유자**: `jd_reset(seed)` + 로그 전체 재적용(로그가
+  정본). `start()`에서 노드 시드(시작 시점 `#seedbox` 값)와 섀도 시드가 다르면(시작 전에 시드를
+  고쳤으면) 여기서 재동기화한다.
+- **`replay:done` 직후** 워클릿에 `state:get`(id `shadow-sync`)을 보내 돌아온 바이트를 섀도에
+  복사 + `jd_state_read` — 리플레이로 워클릿이 과거로 돌아간 시점이 정본이므로 섀도도 거기에
+  맞춘다(리플레이 중의 불일치는 허용, 끝에서 맞춘다).
+- 섀도 전·초기화 실패 폴백: `param`은 `DEFAULT_PARAMS` 전사의 12비트 양자화값
+  (`quantN`/4095, engine `quantize`와 비트 동일 — 4096개 전수 검증됨), 나머지 읽기는 0.
+  **`muted`는 0|1 number** — boolean을 돌려주면 Go `bridge_js.go`의 `intOf`가 패닉하는
+  계열이라(2026-09-05 교훈) 종류 계약이다.
+- Step/Bar·Peak는 워클릿 tick이 정본(섀도는 렌더가 없어 스텝이 안 나간다).
+
+섀도 일치 게이트(measure.mjs): 오디오 시작 +30초에 워클릿 상태와 섀도 상태를 params
+[2..68)·mute[678]·key[679]·mode[680..682)·playing[682]·chord[683..691) 영역에서 비교한다.
+패턴 영역 [68..678)은 제외 — SelectPattern의 "다음 바 확정" 시차 때문에 스냅숏 위치에 따라
+1슬롯 어긋날 수 있다(엔진 설계상 정상).
 
 `tick()`의 flags는 호출 사이 누적 OR이고 읽으면 0으로 리셋한다(Go가 프레임당 1회 읽어도
 94Hz 틱의 사건이 60Hz 프레임에서 새지 않게).
@@ -87,9 +108,12 @@ Go는 유지)뿐 — 한글·ASCII는 동일. 시드는 `start()` 시점의 `#se
 | `replay_unavailable` | 1 | 키프레임 없음/이미 재생 중 |
 | `seed_open` | 1 | URL에 seed 파라미터 |
 | `worklet_error` | 1 | processorerror/시작 실패 |
+| `shadow_error` | 1 | 섀도 엔진 인스턴스화/초기화 실패(폴백 값으로 동작) |
 
 전송: `visibilitychange(hidden)`·`pagehide`·60초마다 `navigator.sendBeacon(JD_REPORT_URL, …)`
-(sendBeacon 실패/없음 → fetch keepalive). **URL 규칙**: 절대 URL(운영 Worker)에는
+(sendBeacon 실패/없음 → fetch keepalive — **헤더 없음**). **본문 종류는 `text/plain` Blob** —
+`application/json` 본문은 교차 출처 preflight를 유발해 운영 Worker 경로 beacon을 늦춘다
+(수신자는 본문을 JSON.parse한다, 종류 헤더는 안 본다). **URL 규칙**: 절대 URL(운영 Worker)에는
 `?kind=telemetry`를 붙인다(cf/worker.js가 질의에서 kind를 읽는다). 상대 URL(로컬
 serve.mjs)에는 붙이지 않는다 — serve.mjs가 `POST /report`를 경로 정확 일치로 처리해
 질의가 붙으면 404가 된다(이 라운드에서 발견한 스펙 전제 오류, 보고됨). kind는 어차피
@@ -150,9 +174,17 @@ node app/measure.mjs --browser chromium --seconds 20   # webkit도 같은 인수
 ```
 
 확인 항목: firstSoundMs(≤ 300 목표), tick 진행(20초 안 step 16값 전부 관측),
-`jd.cmd(0,1,0,0,0,0.9,0)` 후 `jd.param(1) === Math.fround(3686/4095)`(0.9001…),
-state:get 왕복으로 워클릿 파라미터 uint16(=3686)이 미러와 일치, `jd.replay(5)` → replayDone 1,
-액티브 구간 hiddenFrames 0, 텔레메트리가 app/results에 kind=telemetry로 저장.
+`jd.cmd(0,31,0,0,0,0.9,0)`(MASTER) 후 `jd.param(31)`이 `Math.fround(3686/4095)`(0.9001…)
+±1ulp(param은 섀도 엔진의 f32 반환값 — fround의 이중 반올림과 마지막 비트가 어긋날 수 있다),
+state:get 왕복으로 워클릿 파라미터 uint16(=3686)이 **정확히** 일치, `jd.replay(5)` → replayDone 1,
+**섀도 일치**(위 §2 — 시작+30초, 6개 영역, 불일치 시 600ms 뒤 1회 재시도),
+**시작 전 게이트**(캡션1 표시·`#tools`/`#overlay` display none·keyRoot/chord/mode/muted 종류),
+**캡션2**(시작 후 4초 시점 문구)·**캡션3**(기기 뷰 첫 진입)·**캡션3 종료**(CUTOFF 드래그 뒤 hidden),
+**공유 URL 게이트**(기기 뷰 진입 → CUTOFF 드래그 → `jd.cmd(11,…)` Transport; URL 길이
+단조 증가 + host 로그 author=0 ≥2 증가 + `logLen === log().length`), 액티브 구간 hiddenFrames 0,
+텔레메트리가 app/results에 kind=telemetry로 저장(flush `sent(beacon)`/`sent`,
+`telemetrySent ≥ 1`), console/pageerror 0건. 시드 타이핑(overlayKeys 증명)은 `?dev=1` 실행에서만
+— 이 흐름은 dev 없이 도므로 `#overlay`가 숨겨져 있으면 건너뛴다.
 결과 JSON: `app/results/host-<browser>.json`.
 
 ## 7. index.html 메모
@@ -162,3 +194,9 @@ Send report)는 유지. `#seedtext`(z-index 10, pointer-events none, system-ui 1
 rgba(232,226,210,0.7), 하단)가 `#seedbox` 값을 미러한다 — 캔버스 폰트는 ASCII라서 한글 시드
 단어는 DOM이 담당. 스크립트 순서: report-config.js → host.js → wasm_exec.js + 로더
 (host.js의 rAF 패치가 Go 초기화보다 먼저여야 한다).
+
+첫 접촉 캡션: `<div id="caption" hidden>` + `window.JD_CAPTIONS` 스크립트(문구·스타일은 리드
+소유, 상태 판정은 Go main의 `updateCaption` → `jd.hint(state)`). 개발 버튼(`#tools`)·시드
+오버레이(`#overlay`)는 **`?dev=1`에서만** — host.js가 `body.dev`를 단다(CSS
+`body:not(.dev)` 규칙). `#seedtext`는 사용자가 늘 보는 값이라 항상 표시. `body.clean`은
+`#caption`도 함께 숨긴다. `<title>`은 "장단 / Jangdan".

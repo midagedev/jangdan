@@ -35,13 +35,13 @@ const (
 	scopeSegs  = scopeSamps - 1
 	scopeHalfW = 0.5 // 폴리라인 굵기 1px → 반폭
 
-	tapScale       = 1.2 // 첫 힌트 "TAP"
 	seedScale      = 0.7 // 시드 단어
-	hintRingR      = 40.0
-	hintStrokePx   = 2.0
-	hintIdleMinSec = 15.0
-	hintIdleMaxSec = 60.0
-	ledInsetPx     = 4.0 // device rect 하단 안쪽(자동 배치 때)
+	hintRingInset     = 12.0 // 시작 전 링: 기기 rect를 밖으로 부풀리는 폭(px)
+	hintRingStroke    = 3.0  // 시작 전 링 외곽선 굵기
+	hintStrokePx      = 2.0  // 시작 후 기기 외곽 힌트 굵기
+	hintAfterStartSec = 20.0 // 시작 후 이 시간까지 기기 외곽 힌트(첫 기기 탭 전까지)
+	plateDimPreStart  = 0.85 // 시작 전 플레이트 감쇠(ColorScale 배)
+	ledInsetPx        = 4.0  // device rect 하단 안쪽(자동 배치 때)
 
 	gatePollFrames = 4  // CH/OH 게이트 폴 주기(프레임)
 	seedPollFrames = 60 // 시드 단어 폴 주기(1초)
@@ -64,7 +64,6 @@ type Signals struct {
 	DT               float64
 	Now              float64
 	Started          bool
-	Touched          bool // 이 프레임에 눌린 포인터가 하나라도 있다(힌트 소거)
 	Step             int
 	Bar              uint32
 	Flags            uint32 // engine.Flag* + 파트 트리거 비트
@@ -88,8 +87,16 @@ type state struct {
 	beatPhase float64 // 박 위상(꼬리·끄덕임 공용)
 
 	reduced, clean, started bool
-	everTouched             bool
 	manualLocked            bool
+
+	// 첫 접촉 힌트(프레임 로직에서 결정 — 이미지 없는 단위 테스트용)
+	seenStart    bool    // 오디오 시작 tick을 한 번이라도 봤다
+	startT       float64 // 시작 시각(sig.Now)
+	startAge     float64 // 시작 후 경과(초)
+	plateDim     float32 // 시작 전 0.85 감쇠, 시작 후 1
+	hintRing     bool    // 시작 전: 기기 rect+12px 라운드 링
+	hintDevice   bool    // 시작 후 20초: 기기 외곽 펄스(첫 기기 탭 전까지)
+	deviceTapped bool    // 첫 기기 탭(View.Update에서) — 외곽 힌트 즉시 종료
 
 	// 스탠드
 	lampAmp      float32 // 테스트 주입용(기본 lampBreathAmp)
@@ -221,9 +228,23 @@ func (s *state) step(sig Signals, dt float64) {
 	s.clean = sig.CleanScreen
 	s.started = sig.Started
 	s.manualLocked = sig.ManualLocked
-	if sig.Started && sig.Touched {
-		s.everTouched = true
+	// 첫 접촉 힌트 결정 — 시작 전환은 여기서 감지(진짜 tick 도착 프레임 = 시작).
+	// 시작 탭 자체가 힌트를 죽이지 않는다: 2단 힌트(기기 외곽)가 시작 직후 이어진다.
+	if sig.Started && !s.seenStart {
+		s.seenStart = true
+		s.startT = sig.Now
 	}
+	if s.seenStart {
+		s.startAge = sig.Now - s.startT
+	} else {
+		s.startAge = 0
+	}
+	s.plateDim = plateDimPreStart
+	if s.seenStart {
+		s.plateDim = 1
+	}
+	s.hintRing = !s.seenStart
+	s.hintDevice = s.seenStart && !s.deviceTapped && s.startAge <= hintAfterStartSec
 	s.bpm = engine.BPMOf(sig.Tempo)
 	s.lastStep = sig.Step
 	if !s.reduced {
@@ -311,12 +332,12 @@ type View struct {
 	ledLit             []*ebiten.Image
 	ledLitX, ledLitY   []float64
 
-	tapImg       *ebiten.Image
-	tapCX, tapCY float64
-	ringImg      *ebiten.Image
-	hintImg      *ebiten.Image
-	seedImg      *ebiten.Image
-	seedStr      string
+	ringImg       *ebiten.Image
+	ringX, ringY  float64
+	ringRect      [4]float64 // 링 경로 rect(화면 좌표) — 픽셀 판독이 게임 루프 밖에서 불가해 단위 테스트가 직접 잰다
+	hintImg       *ebiten.Image
+	seedImg       *ebiten.Image
+	seedStr       string
 
 	st     state
 	tapped bool // 이 프레임 DeviceTapped 값(Update에서 계산)
@@ -416,7 +437,7 @@ func New(ctx *core.Ctx) (*View, error) {
 	}
 
 	v.buildLEDs()
-	v.buildHints(ctx.Font)
+	v.buildHints()
 	for i := 0; i < scopeSegs; i++ {
 		b := i * 4
 		for k := 0; k < 4; k++ {
@@ -496,24 +517,48 @@ func (v *View) buildLEDs() {
 	}
 }
 
-// buildHints — "TAP" 글자·링(r 40)·기기 외곽 힌트를 미리 그린다(알파 펄스는 blit에서).
-func (v *View) buildHints(font *core.FontSet) {
-	if font != nil {
-		w, h := font.Measure("TAP", tapScale)
-		if w >= 1 {
-			v.tapImg = newOffscreen(int(w)+2, int(h)+2)
-			font.Draw(v.tapImg, "TAP", 1, 1, tapScale, colText, core.AlignLeft)
-			v.tapCX, v.tapCY = float64(int(w)+2)/2, float64(int(h)+2)/2
-		}
-	}
-	size := int(2 * (hintRingR + hintStrokePx))
-	v.ringImg = newOffscreen(size, size)
-	vector.StrokeCircle(v.ringImg, float32(size/2), float32(size/2), float32(hintRingR),
-		float32(hintStrokePx), colText, true)
+// buildHints — 첫 접촉 힌트 두 종류를 미리 그린다(알파 펄스는 blit에서).
+// ① 시작 전: 기기 rect를 12px 부풀린 라운드 사각 외곽선(굵기 3, colText) — "TAP" 글자
+// 대신 기기 자체를 가리킨다(작은 링이 어디를 누를지 알려주지 않았다).
+// ② 시작 후: 기기 외곽선(굵기 2 — 기존 힌트 이미지 계약 유지).
+func (v *View) buildHints() {
 	dr := v.layout.Device
+	pad := hintRingInset + hintRingStroke // 외곽선이 이미지를 벗어나지 않게
+	v.ringImg = newOffscreen(int(dr[2]+2*pad)+1, int(dr[3]+2*pad)+1)
+	v.ringX, v.ringY = dr[0]-pad, dr[1]-pad
+	var p vector.Path
+	// 경로는 **부풀린 rect**(rect±12, 코너 반지름 12)를 따른다 — 이미지 패딩(pad=15)은
+	// 외곽선(±1.5px)이 잘리지 않게 하는 여유일 뿐이다(첫 판정에서 rect 자체에 그려져
+	// pixcheck 휘도 상승 1.4로 적발 — 스트로크 중심은 rect 가장자리에서 12px 바깥).
+	// ringRect에 화면 좌표 rect를 남긴다(단위 테스트 계약 — 픽셀 판독은 게임 루프 필요).
+	v.ringRect = hintRingRect(dr)
+	x, y := float32(v.ringRect[0]-v.ringX), float32(v.ringRect[1]-v.ringY) // 화면 → 이미지 좌표
+	w, h := float32(v.ringRect[2]), float32(v.ringRect[3])
+	r := float32(hintRingInset) // 코너 반지름 = 부풀림 폭
+	p.MoveTo(x+r, y)
+	p.LineTo(x+w-r, y)
+	p.ArcTo(x+w, y, x+w, y+r, r)
+	p.LineTo(x+w, y+h-r)
+	p.ArcTo(x+w, y+h, x+w-r, y+h, r)
+	p.LineTo(x+r, y+h)
+	p.ArcTo(x, y+h, x, y+h-r, r)
+	p.LineTo(x, y+r)
+	p.ArcTo(x, y, x+r, y, r)
+	p.Close()
+	dop := vector.DrawPathOptions{AntiAlias: true}
+	dop.ColorScale.Scale(float32(colText.R)/255, float32(colText.G)/255, float32(colText.B)/255, 1)
+	vector.StrokePath(v.ringImg, &p,
+		&vector.StrokeOptions{Width: float32(hintRingStroke), LineJoin: vector.LineJoinRound}, &dop)
 	v.hintImg = newOffscreen(int(dr[2])+5, int(dr[3])+5)
 	vector.StrokeRect(v.hintImg, 2.5, 2.5, float32(dr[2]), float32(dr[3]),
 		float32(hintStrokePx), colText, true)
+}
+
+// hintRingRect — 시작 전 링 경로의 rect(화면 좌표): 기기 rect를 inset만큼 부풀린다.
+// 단일 소유자(2026-09-06 결함 방어 — 경로가 rect 자체에 그려져 부풀린 밴드가 비었었다).
+func hintRingRect(dr core.Rect) (r [4]float64) {
+	return [4]float64{dr[0] - hintRingInset, dr[1] - hintRingInset,
+		dr[2] + 2*hintRingInset, dr[3] + 2*hintRingInset}
 }
 
 // rebuildSeedCache — 시드 단어가 바뀔 때만(ASCII면 새기고, 아니면 DOM 오버레이 몫).
@@ -547,6 +592,7 @@ func (v *View) Update(ctx *core.Ctx) {
 			v.st.tapArmed = -1
 			if v.layout.Device.Contains(p.X, p.Y) {
 				v.tapped = true
+				v.st.deviceTapped = true // 첫 기기 탭 — 기기 외곽 힌트 즉시 종료
 			}
 		}
 	}
@@ -582,18 +628,10 @@ func (v *View) DeviceTapped() bool { return v.tapped }
 
 // signals — Ctx/브리지에서 이번 프레임 신호를 모은다.
 func (v *View) signals(ctx *core.Ctx) Signals {
-	touched := false
-	for i := range ctx.Pointers {
-		if ctx.Pointers[i].Pressed {
-			touched = true
-			break
-		}
-	}
 	return Signals{
 		DT:             ctx.DT,
 		Now:            ctx.Now,
 		Started:        ctx.Tick.Started,
-		Touched:        touched,
 		Step:           ctx.Tick.Step,
 		Bar:            ctx.Tick.Bar,
 		Flags:          ctx.Tick.Flags,
@@ -617,11 +655,15 @@ func (v *View) Draw(screen *ebiten.Image, ctx *core.Ctx) {
 	tr, tg, tb := s.tintNow()
 
 	// 1) 플레이트. 시간대 전환: 파일이 다르면 두 장 알파 크로스페이드, 같으면 틴트.
+	// 시작 전엔 플레이트를 ×0.85로 어둡게(첫 제스처의 before/after — 힌트 링과 함께
+	// "아직 켜지지 않았다"를 알린다. 감쇠는 플레이트에만, 다른 요소는 틴트 그대로).
+	pd := s.plateDim
+	ptr, ptg, ptb := tr*pd, tg*pd, tb*pd
 	two := s.todBlend < 1 && v.plateNm[s.prevTod] != v.plateNm[s.tod]
 	if two {
-		v.blit(screen, v.plates[s.prevTod], 0, 0, tr, tg, tb, float32(1-s.todBlend))
+		v.blit(screen, v.plates[s.prevTod], 0, 0, ptr, ptg, ptb, float32(1-s.todBlend))
 	}
-	v.blit(screen, v.plates[s.tod], 0, 0, tr, tg, tb, 1)
+	v.blit(screen, v.plates[s.tod], 0, 0, ptr, ptg, ptb, 1)
 
 	// 2) 창밖 마을 불빛(캐시 1장)
 	if v.winImg != nil {
@@ -734,28 +776,20 @@ func (v *View) Draw(screen *ebiten.Image, ctx *core.Ctx) {
 	}
 }
 
-// drawHints — 첫 힌트: !Started면 "TAP"+링, Started 뒤 15~60초 무접촉이면 기기 외곽 펄스.
+// drawHints — 첫 접촉 힌트(결정은 state.step). 시작 전: 기기 rect+12px 라운드 링 펄스.
+// 시작 후 20초(첫 기기 탭 전): 기기 외곽선 펄스 — 시작 탭이 힌트를 죽이지 않는다
+// (구 규칙은 15~60초 무접촉 창 + everTouched라 시작 직후엔 힌트가 없었다).
 func (v *View) drawHints(dst *ebiten.Image, tr, tg, tb float32) {
 	s := &v.st
-	if !s.started {
-		cx, cy := v.layout.Device.Center()
-		a := float32(0.75 + 0.25*math.Sin(2*math.Pi*s.t)) // 1Hz 0.5..1.0
-		if v.tapImg != nil {
-			v.blit(dst, v.tapImg, cx-v.tapCX, cy-v.tapCY, tr, tg, tb, a)
-		}
-		if v.ringImg != nil {
-			off := hintRingR + hintStrokePx
-			v.blit(dst, v.ringImg, cx-off, cy-off, tr, tg, tb, 1)
-		}
+	a := float32(0.75 + 0.25*math.Sin(2*math.Pi*s.t)) // 1Hz 0.5..1.0
+	if s.hintRing && v.ringImg != nil {
+		v.blit(dst, v.ringImg, v.ringX, v.ringY, tr, tg, tb, a)
 		return
 	}
-	if v.hintImg == nil || s.now < hintIdleMinSec || s.now > hintIdleMaxSec ||
-		s.everTouched || s.manualLocked {
-		return
+	if s.hintDevice && v.hintImg != nil {
+		dr := v.layout.Device
+		v.blit(dst, v.hintImg, dr[0]-2.5, dr[1]-2.5, tr, tg, tb, a)
 	}
-	a := float32(0.75 + 0.25*math.Sin(2*math.Pi*s.t))
-	dr := v.layout.Device
-	v.blit(dst, v.hintImg, dr[0]-2.5, dr[1]-2.5, tr, tg, tb, a)
 }
 
 // drawScope — 기기의 작은 스코프. Bridge.Scope 256샘플 폴리라인(굵기 1, #7FE08A α0.8).

@@ -1,7 +1,8 @@
 // host.js — 장단 호스트 층. AudioWorklet 프로세서(app/web/processor.js)를 만들고
 // window.jd API(계약 표: app/core/bridge_js.go 파일 상단 주석)를 노출한다.
 // 로그가 정본: 엔진에 닿는 모든 Cmd는 (block, author, cmd)로 기록되고 리플레이는
-// 이 로그를 재생한다(docs/impl-plan-2026-09-05.md §1·§4). 상세: app/web/README-host.md.
+// 이 로그를 재생한다(docs/impl-plan-2026-09-05.md §1·§4). UI 상태 읽기는 메인
+// 스레드 섀도 엔진(렌더하지 않는 두 번째 인스턴스)이 담당한다. 상세: app/web/README-host.md.
 (() => {
   'use strict';
 
@@ -12,7 +13,7 @@
   const FLAG_BAR = 1 << 8;
   const FLAG_DROP = 1 << 9;
   // CmdKind: 0 SetParam 1 BassStep 2 DrumStep 3 SelectPattern 4 Mute 5 Trigger 6 Drop 7 ResetPos
-  const STEP_GATE = 1, STEP_SLIDE = 2, STEP_ACCENT = 4;
+  //          8 SetKey 9 SetChord 10 BassMode 11 Transport
 
   // DefaultParams — engine/params.go의 DefaultParams() 전사. 값 변경은 양쪽 함께.
   const DEFAULT_PARAMS = [
@@ -135,39 +136,73 @@
     return Math.fround(t + 0.5) | 0; // Go uint16 변환은 절단
   }
 
-  const params = new Float64Array(NUM_PARAMS);
-  const bassNote = new Uint8Array(2 * 8 * 16);  // [part][slot][step] — 엔진 Apply가 현재 슬롯에 쓴다
-  const bassFlags = new Uint8Array(2 * 8 * 16);
-  const drumFlags = new Uint8Array(6 * 16);     // 드럼은 슬롯 없음
-  let muteBits = 0;
-  const slot = [0, 0];
-  const slotPending = [0, 0]; // SelectPattern은 다음 바 경계에 확정(엔진과 같은 의미)
-
+  // ==== 섀도 엔진 미러 — 메인 스레드 두 번째 wasm 인스턴스(렌더하지 않는다) ====
+  // 손으로 쓰던 미러 배열(params·bassNote·drumFlags·…) 대신 엔진 그 자체를 한 벌 더
+  // 돌린다: cmd()를 즉시 적용하고 UI(param/bassStep/keyRoot/…)는 이 인스턴스에서 읽는다.
+  // 바 경계 대기값(SelectPattern·SetKey)은 FLAG_BAR tick마다 jd_sync()로 확정 — 엔진의
+  // "다음 바에 적용"과 같은 의미. Step/Bar·Peak는 워클릿 tick이 정본(섀도는 렌더가
+  // 없어 스텝이 안 나간다). 시작 전 도착한 cmd는 pendingShadow에 쌓아 initShadow 직후
+  // 재생한다(초기화 경쟁으로 인한 적용 누락 봉쇄).
+  const shadow = { w: null, stateView: null, seed: 0, ready: false };
+  const pendingShadow = [];
+  const fallbackParams = new Float64Array(NUM_PARAMS); // 섀도 전 파라미터 폴백(기본값 양자화)
   for (let i = 0; i < NUM_PARAMS; i++) {
-    params[i] = Math.fround(quantN(DEFAULT_PARAMS[i]) / PARAM_STEPS);
+    fallbackParams[i] = Math.fround(quantN(DEFAULT_PARAMS[i]) / PARAM_STEPS);
+  }
+  function shadowApply(k, a, b, c, d, v) {
+    if (shadow.w) shadow.w.jd_cmd(k | 0, a | 0, b | 0, c | 0, d | 0, +v);
+    else pendingShadow.push([k | 0, a | 0, b | 0, c | 0, d | 0, +v]);
+  }
+  // shadowReset — 리셋 경로의 단일 소유자. 섀도를 새 시드로 초기화하고 로그 전체를
+  // 재적용한다(로그가 정본 — 시작 전 pendingCmds도 블록 0으로 이미 들어 있다).
+  function shadowReset(seed) {
+    shadow.seed = seed >>> 0;
+    pendingShadow.length = 0;
+    if (!shadow.w) return;
+    shadow.w.jd_reset(shadow.seed);
+    for (let i = 0; i < log.length; i++) {
+      const e = log[i];
+      shadow.w.jd_cmd(e.k, e.a, e.b, e.c, e.d, e.v);
+    }
+  }
+  function initShadow(module) {
+    try {
+      const inst = new WebAssembly.Instance(module, {});
+      if (typeof inst.exports._initialize === 'function') inst.exports._initialize();
+      const seed = seedNumber();
+      inst.exports.jd_init(seed);
+      shadow.w = inst.exports;
+      shadow.seed = seed >>> 0;
+      shadowStateView(); // 첫 파생(이후 jd_reset이 메모리를 키우면 shadowStateView가 갱신)
+      shadow.ready = true;
+      shadowReset(shadow.seed); // 로그 재적용 → pendingShadow도 여기서 드레인된다
+    } catch (e) {
+      console.warn('jd host: 섀도 엔진 초기화 실패 — 폴백 값으로 동작:', e);
+      telemetry('shadow_error', 1);
+    }
+  }
+  // shadowStateView — 섀도 상태 뷰를 **매 호출마다 현재 메모리에서 다시 파생**한다.
+  // jd_reset의 재할당 등으로 wasm 메모리가 자라면 이전 buffer는 detach되어
+  // set/slice가 TypeError로 죽는다(실측 — 초기화 직후 jd_reset이 이미 한 번 키운다).
+  // 상태 배열은 고정 전역이라 주소는 그대로, buffer 객체만 갱신하면 된다.
+  function shadowStateView() {
+    const w = shadow.w;
+    if (!w) return null;
+    const buf = w.memory.buffer;
+    if (!shadow.stateView || shadow.stateView.buffer !== buf
+      || shadow.stateView.byteOffset !== w.jd_state_ptr() || shadow.stateView.length !== w.jd_state_size()) {
+      shadow.stateView = new Uint8Array(buf, w.jd_state_ptr(), w.jd_state_size());
+    }
+    return shadow.stateView;
   }
 
-  // mirrorCmd — cmd() 시점에 호스트 미러를 갱신(워클릿 왕복 없이 param()/bassStep()이 동기).
-  // 리플레이는 K + 로그 재생으로 같은 제어 상태를 재현하므로 미러는 따로 되돌리지 않는다.
-  function mirrorCmd(k, a, b, c, d, v) {
-    if (k === 0) { // SetParam
-      if (a >= 0 && a < NUM_PARAMS) params[a] = Math.fround(quantN(v) / PARAM_STEPS);
-    } else if (k === 1) { // BassStep — 현재 슬롯에 기록
-      if (a >= 0 && a <= 1) {
-        const i = a * 128 + slot[a] * 16 + (b & 15);
-        bassNote[i] = c > 36 ? 36 : c;
-        bassFlags[i] = d & (STEP_GATE | STEP_SLIDE | STEP_ACCENT);
-      }
-    } else if (k === 2) { // DrumStep
-      if (a >= 2 && a <= 7) drumFlags[(a - 2) * 16 + (b & 15)] = d & (STEP_GATE | STEP_ACCENT);
-    } else if (k === 3) { // SelectPattern
-      if (a >= 0 && a <= 1) slotPending[a] = b & 7;
-    } else if (k === 4) { // Mute
-      if (a >= 0 && a < 8) {
-        if (b) muteBits |= 1 << a;
-        else muteBits &= ~(1 << a);
-      }
-    }
+  // 리플레이 직후 워클릿 상태를 섀도에 복사(리플레이 중의 불일치는 허용 — 끝에서 맞춘다).
+  function shadowSyncFromBytes(bytes) {
+    const view = shadowStateView();
+    if (!view) return;
+    const n = Math.min(bytes.length, view.length);
+    view.set(n === bytes.length ? bytes : bytes.subarray(0, n));
+    shadow.w.jd_state_read(bytes.length);
   }
 
   // ==== 텔레메트리 ====
@@ -215,13 +250,15 @@
     // kind 질의는 절대 URL(운영 Worker — cf/worker.js가 질의에서 kind를 읽는다)에만 붙인다.
     // 로컬 serve.mjs는 POST /report를 경로 정확 일치로 처리해 질의가 붙으면 404가 된다
     // (읽기 전용 파일 — kind는 어차피 본문에 있다). README-host.md §3 참조.
+    // 본문 종류는 text/plain으로 보낸다 — application/json 본문은 교차 출처 preflight를
+    // 유발해 Worker 경로 beacon을 늦춘다(수신자는 본문을 JSON.parse한다, 종류는 안 본다).
     const full = /^https?:/i.test(url) ? url + '?kind=telemetry' : url;
-    if (navigator.sendBeacon && navigator.sendBeacon(full, new Blob([body], { type: 'application/json' }))) {
+    if (navigator.sendBeacon && navigator.sendBeacon(full, new Blob([body], { type: 'text/plain' }))) {
       stats.telemetrySent++;
       return Promise.resolve('sent(beacon)');
     }
     return fetch(full, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true,
+      method: 'POST', body, keepalive: true, // 헤더 없음 — text/plain 단순 요청 유지(preflight 회피)
     }).then((r) => {
       stats.telemetrySent++;
       return r.ok ? 'sent' : 'failed ' + r.status;
@@ -237,6 +274,9 @@
   // ==== 오디오 ====
   // 페이지 로드 즉시(제스처 전) 컴파일을 시작해 첫 탭→첫 소리 300ms 예산에 준다.
   const modulePromise = WebAssembly.compileStreaming(fetch('engine.wasm'));
+  // 같은 모듈로 섀도 엔진도 즉시 구동(렌더 없는 UI 미러 — 위 섀로 절). 컴파일 실패는
+  // start() 경로가 보고한다; 섀도만의 실패는 initShadow가 잡는다.
+  modulePromise.then(initShadow, () => {});
   // AudioContext는 제스처 전에 만들어 둘 수 있다(suspended 상태) — addModule까지 미리 끝내 두면
   // 제스처 뒤에는 resume + 노드 생성만 남는다. 실측(2026-09-05): 제스처 뒤 생성·addModule 경로는
   // chromium 첫 소리 347ms(예산 300 초과), 이 선행 경로가 그 차이를 없앤다. 생성이 거부되는
@@ -274,8 +314,9 @@
       lastTickMsg = d;
       flagsAccum |= d.flags;
       if (d.flags & FLAG_BAR) {
-        slot[0] = slotPending[0];
-        slot[1] = slotPending[1];
+        // 바 경계 — 섀도의 대기값(SelectPattern·SetKey)을 확정한다. 구 내보출이 없는
+        // engine.wasm에서는 건너뛴다(입력 방어 — 폴백은 0값 읽기).
+        if (shadow.w && typeof shadow.w.jd_sync === 'function') shadow.w.jd_sync();
         // 키프레임: bar가 16의 배수로 바뀐 tick. bar 0(재생 시작)도 포함 —
         // 세션 초반에도 리플레이가 가능해야 한다(README-host.md).
         if (!isReplaying && d.bar % 16 === 0 && d.bar !== lastKFBar) {
@@ -292,6 +333,9 @@
         keyframes.push({ block: d.block, bytes: d.bytes });
         stats.keyframes = keyframes.length;
       }
+      if (d.id === 'shadow-sync') { // 리플레이 직후 워클릿 상태 → 섀도
+        shadowSyncFromBytes(d.bytes);
+      }
       const fn = stateWaiters.get(d.id);
       if (fn) { stateWaiters.delete(d.id); fn(d.bytes, d.block); }
     } else if (d.t === 'state:ack') {
@@ -302,6 +346,8 @@
       isReplaying = false;
       stats.replayDone++;
       telemetry('replay_used', 1);
+      // 워클릿이 리플레이를 마친 지금이 정본 — 상태를 가져와 섀도에 덮어쓴다.
+      if (node) node.port.postMessage({ t: 'state:get', id: 'shadow-sync' });
     } else if (d.t === 'stats') {
       workletStats = d;
     }
@@ -322,10 +368,11 @@
         await audio.audioWorklet.addModule('processor.js');
       }
       const module = await modulePromise;
+      const nodeSeed = seedNumber();
       node = new AudioWorkletNode(audio, 'jd', {
         numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2],
         // collect:true — 이 페이지가 곧 계측 페이지다(스톨 히스토그램용).
-        processorOptions: { module, seed: seedNumber(), collect: true },
+        processorOptions: { module, seed: nodeSeed, collect: true },
       });
       node.port.onmessage = onWorkletMsg;
       node.onprocessorerror = () => telemetry('worklet_error', 1);
@@ -339,6 +386,9 @@
         stats.paramMsgsSent++;
       }
       pendingCmds.length = 0;
+      // 섀도가 다른 시드로 시작했으면(시작 전에 시드를 고쳤으면) 여기서 재동기화 —
+      // 새 노드 = 새 세션이므로 섀도도 같은 리셋을 받고 로그를 다시 적용한다.
+      if ((nodeSeed >>> 0) !== shadow.seed) shadowReset(nodeSeed);
     } catch (e) {
       console.error('jd host: 오디오 시작 실패:', e);
       telemetry('worklet_error', 1);
@@ -353,7 +403,7 @@
   function cmd(kind, a, b, c, d, v, author) {
     kind |= 0; a |= 0; b |= 0; c |= 0; d |= 0; v = +v; author |= 0;
     stats.cmdsSent++;
-    mirrorCmd(kind, a, b, c, d, v);
+    shadowApply(kind, a, b, c, d, v);
     if (kind === 6) telemetry('drop', 1); // Drop
     if (kind === 0 && author === 0 && firstKnobAt === null) { // 첫 Human SetParam
       firstKnobAt = performance.now();
@@ -373,7 +423,9 @@
   }
 
   // tick() — Go가 프레임당 1회 읽는 스냅샷. flags는 호출 사이 누적 OR이고 읽으면 0으로 리셋.
-  const tickOut = { started: false, block: 0, step: 0, bar: 0, flags: 0, peak: 0, ctxTime: 0 };
+  // playing은 워클릿이 jd_playing()으로 실어 보낸다(0|1). 필드 없는 tick(구 워클릿)은
+  // 정지로 해석한다 — 멈춘 엔진을 재생 중으로 그리는 쪽이 더 나쁘다(입력 방어).
+  const tickOut = { started: false, block: 0, step: 0, bar: 0, flags: 0, peak: 0, ctxTime: 0, playing: false };
   function tick() {
     if (!lastTickMsg) return tickOut;
     tickOut.started = true;
@@ -383,6 +435,7 @@
     tickOut.flags = flagsAccum;
     tickOut.peak = lastTickMsg.peak;
     tickOut.ctxTime = lastTickMsg.ctxTime;
+    tickOut.playing = !!lastTickMsg.playing;
     flagsAccum = 0;
     return tickOut;
   }
@@ -469,6 +522,28 @@
   const wallOut = [0, 0, 0];
 
   let cleanScreen = false; // 클린 스크린(UI 잡동사니 숨김) — Go가 매 프레임 읽는다
+
+  // hint — 첫 접촉 캡션(상태는 Go main이 정한다, 문구는 index.html의 JD_CAPTIONS).
+  // 등록 안 된 상태(0 포함)는 숨긴다(입력 방어 — 모르는 상태를 그리지 않는다).
+  const captionEl = document.getElementById('caption');
+  function hint(state) {
+    if (!captionEl) return;
+    state |= 0;
+    const c = window.JD_CAPTIONS;
+    if (c && Object.prototype.hasOwnProperty.call(c, state) && c[state] != null) {
+      captionEl.textContent = c[state];
+      captionEl.hidden = false;
+    } else {
+      captionEl.hidden = true;
+    }
+  }
+
+  // 개발 버튼(#tools)·시드 오버레이(#overlay)는 ?dev=1에서만(CSS body.dev 규칙).
+  // #seedtext는 사용자가 늘 보는 값이라 항상 둔다.
+  if (new URLSearchParams(location.search).get('dev') === '1') {
+    document.body.classList.add('dev');
+  }
+
   window.jd = {
     cleanScreen() { return cleanScreen; },
     setCleanScreen(b) { cleanScreen = !!b; document.body.classList.toggle('clean', cleanScreen); return cleanScreen; },
@@ -478,15 +553,24 @@
     cmd,
     tick,
     scope,
-    param: (id) => (id >= 0 && id < NUM_PARAMS ? params[id] : 0),
-    bassStep: (p, step) => {
-      if (p < 0 || p > 1) return 0;
-      const i = p * 128 + slot[p] * 16 + ((step | 0) & 15);
-      return bassNote[i] | (bassFlags[i] << 8);
+    // 상태 읽기는 전부 섀도 엔진에서(렌더 워클릿 왕복 없이 동기). 섀도 전·초기화 실패에는
+    // 파라미터는 기본값 양자화 폴백, 나머지는 0 — 브리지(intOf)가 number를 받게 종류 유지.
+    param: (id) => {
+      id |= 0;
+      if (id >= 0 && id < NUM_PARAMS) {
+        if (shadow.w && typeof shadow.w.jd_param === 'function') return shadow.w.jd_param(id);
+        return fallbackParams[id];
+      }
+      return 0;
     },
-    drumStep: (p, step) => (p >= 2 && p <= 7 ? drumFlags[(p - 2) * 16 + ((step | 0) & 15)] : 0),
-    muted: (p) => p >= 0 && p < 8 && ((muteBits >> p) & 1) === 1,
-    slot: (p) => (p >= 0 && p <= 1 ? slot[p] : 0),
+    bassStep: (p, step) => (shadow.w ? shadow.w.jd_bass_step(p | 0, (step | 0) & 15) : 0),
+    drumStep: (p, step) => (shadow.w ? shadow.w.jd_drum_step(p | 0, (step | 0) & 15) : 0),
+    muted: (p) => (shadow.w ? shadow.w.jd_muted(p | 0) : 0), // 0|1 number — 2026-09-05 boolean 패닉 교훈(bridge_js intOf)
+    slot: (p) => (shadow.w ? shadow.w.jd_slot(p | 0) : 0),
+    keyRoot: () => (shadow.w && typeof shadow.w.jd_key === 'function' ? shadow.w.jd_key() : 0),
+    chord: (bar) => (shadow.w && typeof shadow.w.jd_chord === 'function' ? shadow.w.jd_chord(bar | 0) : 0),
+    mode: (part) => (shadow.w && typeof shadow.w.jd_mode === 'function' ? shadow.w.jd_mode(part | 0) : 0),
+    hint,
     telemetry,
     replay,
     replaying: () => isReplaying,
@@ -503,8 +587,12 @@
     firstFrame: () => { if (stats.tFirstFrame === null) stats.tFirstFrame = performance.now(); },
     allocPerFrame: (bytes) => { stats.allocPerFrame = bytes; },
     markFrames,
-    // 아래 둘은 측정·계측 전용(bridge_js.go 표 밖 — measure.mjs가 쓴다).
+    // 아래 셋은 측정·계측 전용(bridge_js.go 표 밖 — measure.mjs가 쓴다).
     debugStateGet,
+    debugShadowState: () => {
+      const v = shadowStateView();
+      return v ? v.slice(0, shadow.w.jd_state_write()) : null;
+    },
     telemetryFlush,
   };
 

@@ -191,9 +191,12 @@ class JDProcessor extends AudioWorkletProcessor {
     if (pk > this.tickPeak) this.tickPeak = pk;
     if (++this.tickN >= TICK_EVERY) {
       this.tickN = 0;
+      // playing 0|1 — 트랜스포트 상태. 호스트는 이 값으로 Tick.Playing을 채운다(구 워클릿
+      // 호환: 필드가 없으면 호스트가 false로 해석한다).
       this.port.postMessage({
         t: 'tick', block: w.jd_block(), step: w.jd_step(), bar: w.jd_bar(),
         flags: this.tickFlags, peak: this.tickPeak, ctxTime: currentTime, applied: this.applied,
+        playing: typeof w.jd_playing === 'function' ? w.jd_playing() : 0,
       });
       this.tickFlags = 0; this.tickPeak = 0;
     }

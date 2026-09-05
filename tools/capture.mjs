@@ -15,6 +15,9 @@ const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(`--${k}`); return i >= 0 ? args[i + 1] : d; };
 const out = opt('out', path.join(root, 'scratch', 'captures'));
 const browserName = opt('browser', 'chromium');
+// room-hint 컷 대기(ms). 시작 전 링 펄스(1Hz, 알파 0.5..1.0)의 위상은 앱 시작 후 경과로
+// 정해지므로 캡처 시점을 옮겨 밝은 구간에 맞출 수 있다 — pixcheck 휘도 상승 게이트용.
+const hintWait = Number(opt('hint-wait', 800));
 fs.mkdirSync(out, { recursive: true });
 const PORT = Number(process.env.JD_PORT || 8444); // app/serve.mjs와 같은 변수
 const BASE = `https://localhost:${PORT}/`;
@@ -47,7 +50,7 @@ const logs = [];
 page.on('console', (m) => { logs.push(m.type() + ': ' + m.text()); if (m.type() === 'error') errors.push(m.text()); });
 await page.goto(BASE + 'index.html', { waitUntil: 'load' });
 await page.waitForFunction(() => window.__jdStats && window.__jdStats().tFirstFrame !== null, null, { timeout: 30000 });
-await page.waitForTimeout(800);
+await page.waitForTimeout(hintWait);
 const shot = async (name) => { await page.screenshot({ path: path.join(out, name) }); console.log('shot', name); };
 await shot('room-hint.png');
 // 탭(제스처) → 오디오 시작. 캔버스 가운데 빈 곳.
