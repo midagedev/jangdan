@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>장단 스파이크 — TinyGo AudioWorklet</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 16px; max-width: 720px; }
+  button { font-size: 16px; padding: 6px 14px; margin: 4px 4px 4px 0; }
+  select { font-size: 14px; }
+  .panel { background: #f4f4f4; padding: 8px 12px; margin: 10px 0; border-radius: 6px; white-space: pre-wrap; font: 12px/1.45 ui-monospace, monospace; }
+  .warn { color: #b00; font-weight: 600; }
+  label { display: inline-block; width: 90px; }
+  .row { margin: 2px 0; }
+  pre { background: #222; color: #9f9; padding: 10px; border-radius: 6px; font: 11px/1.4 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; }
+</style>
+</head>
+<body>
+<h2>장단 스파이크 — TinyGo wasm in AudioWorklet</h2>
+<p id="ctxwarn" class="warn"></p>
+<p>
+  <button id="start">Start</button>
+  부하 승수:
+  <select id="mult">
+    <option value="1" selected>1×</option>
+    <option value="4">4×</option>
+    <option value="16">16×</option>
+  </select>
+  경과: <span id="elapsed">0.0s</span>
+</p>
+<div class="row"><label> sliders (ParamID 순):</label></div>
+<div id="sliders"></div>
+<p>
+  <button id="offline">Offline → hash</button>
+  초:
+  <select id="offlineN">
+    <option value="30">30</option>
+    <option value="300" selected>300</option>
+  </select>
+  <span id="offlineState"></span>
+</p>
+<p><button id="send">Send report</button></p>
+<h3>라이브 통계</h3>
+<div class="panel" id="stats">대기 중…</div>
+<h3>결과 JSON</h3>
+<pre id="json">{"offlineHash":null}</pre>
+<script src="main.js"></script>
+</body>
+</html>
