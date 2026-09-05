@@ -579,3 +579,75 @@ func TestDisplayCache(t *testing.T) {
 		t.Fatalf("표시창 %q(TUN 99 예상)", h.v.disp[0].text)
 	}
 }
+
+// — 계약↔단언: 노브 라벨 표시명(비전 처방 4 — 드럼 내부명 노출 금지) —
+
+func TestKnobDisplayNames(t *testing.T) {
+	h := newHarness(t)
+	// 드럼: 내부 파라미터명(BD_LEVEL)이 아니라 표시명(LEVEL) — 보이스명은 패드가 담당.
+	for _, name := range []string{"BD_LEVEL", "SD_LEVEL", "CH_LEVEL", "OH_LEVEL", "CP_LEVEL", "CY_LEVEL"} {
+		k := knobAt(h.v, secDrums, name)
+		if k == nil {
+			t.Fatalf("드럼 노브 %s 없음", name)
+		}
+		if k.label != "LEVEL" {
+			t.Fatalf("%s 라벨 %q(LEVEL 예상)", name, k.label)
+		}
+	}
+	for _, name := range []string{"BD_TUNE", "CY_TUNE"} {
+		if k := knobAt(h.v, secDrums, name); k.label != "TUNE" {
+			t.Fatalf("%s 라벨 %q(TUNE 예상)", name, k.label)
+		}
+	}
+	// 베이스라인·fx는 레이아웃 이름 그대로.
+	if k := knobAt(h.v, secBassA, "CUTOFF"); k.label != "CUTOFF" {
+		t.Fatalf("CUTOFF 라벨 %q", k.label)
+	}
+	if k := knobAt(h.v, secFx, "MASTER"); k.label != "MASTER" {
+		t.Fatalf("MASTER 라벨 %q", k.label)
+	}
+}
+
+// — 계약↔단언: 버튼 라벨 축소 규칙(비전 처방 6 — 예산 = rect 폭 − 4, 하한 0.3) —
+
+func TestShrinkScale(t *testing.T) {
+	cases := []struct {
+		base, w, maxW, want float64
+	}{
+		{0.45, 42.4, 43, 0.45},             // 예산 안 — 불변(RESUME 실측 42.4 vs 47−4)
+		{0.45, 30.9, 30, 0.45 * 30 / 30.9}, // SLIDE 실측 30.9 vs 34−4 — 비례 축소
+		{0.45, 94.1, 30, 0.3},              // 축소해도 하한 밑 — 0.3
+		{0.45, 0, 30, 0.45},                // 빈 라벨 — 나눗셈 없음
+	}
+	for _, c := range cases {
+		if got := shrinkScale(c.base, c.w, c.maxW); math.Abs(got-c.want) > 1e-9 {
+			t.Fatalf("shrinkScale(%v, %v, %v) = %v(%v 예상)", c.base, c.w, c.maxW, got, c.want)
+		}
+	}
+	// 규칙의 산출 스케일에서 다시 재면 예산 안이어야 한다(하한이 걸린 경우는 제외).
+	if s := shrinkScale(0.45, 30.9, 30); s*30.9/0.45 > 30+1e-9 {
+		t.Fatalf("축소 후 폭 %v가 예산 초과", s*30.9/0.45)
+	}
+}
+
+// — 계약↔단언: 스코프 자동 이득(비전 처방 7) —
+
+func TestScopeGain(t *testing.T) {
+	cases := []struct {
+		peak, want float32
+	}{
+		{0, 8},     // 무신호/빈 창도 ×8(중앙선)
+		{0.04, 8},  // 노이즈 바닥(< 0.05) — ×8
+		{0.05, 8},  // 경계 — 1/0.05 = 20이 상한에 걸림
+		{0.125, 8}, // 1/0.125 = 8 = 상한
+		{0.2, 5},   // 1/peak — 창의 peak가 진폭 예산을 정확히 채움
+		{0.4, 2.5},
+		{0.5, 2},
+		{1, 1}, // 클램프 상단 — 이득 없음
+	}
+	for _, c := range cases {
+		if got := scopeGain(c.peak); math.Abs(float64(got-c.want)) > 1e-5 {
+			t.Fatalf("scopeGain(%v) = %v(%v 예상)", c.peak, got, c.want)
+		}
+	}
+}

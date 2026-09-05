@@ -40,13 +40,18 @@ const (
 	dropPulseAmp = 0.35  // Build 중 DROP 버튼 펄스 진폭(+0..35%)
 	dropPulseHz  = 1.0   // 펄스 주파수
 	overlayLitA  = 0.18  // lit 반투명 흰 사각 알파
-	labelKnobDy  = 4     // 노브 라벨: cy + r + 4
+	knobDyMain   = 18    // 노브 라벨 오프셋: cy + r + 18(베이스라인·fx — 눈금 겹침에서 +14px)
+	knobDyDrums  = 14    // 드럼 노브 라벨 오프셋(라벨판이 좁아 +10px)
 	plateInset   = 6     // 섹션 이름판 왼쪽 정렬 들여쓰기(px)
+	titleShiftX  = 40    // JANGDAN x 이동(좌상단 DOM 시드 입력 회피)
+	labelFitPad  = 4     // 버튼 라벨 폭 예산 = rect 폭 − 4
+	labelFloor   = 0.3   // 라벨 축소 하한
 )
 
 // 색 계약(스펙 hex 그대로).
 var (
 	colLabel  = color.NRGBA{0xE8, 0xE2, 0xD2, 191} // #E8E2D2 α0.75 — 라벨
+	colInk    = color.NRGBA{0x2A, 0x26, 0x22, 230} // #2A2622 α0.9 — 밝은 판 위 어두운 잉크 라벨(비전 처방; hex는 colLEDOff와 같음)
 	colLCD    = color.NRGBA{0x7F, 0xE0, 0x8A, 255} // #7FE08A — 표시창·스코프
 	colLEDOn  = color.NRGBA{0xFF, 0x9A, 0x3C, 255} // 켜짐 α1.0
 	colLEDMid = color.NRGBA{0xFF, 0x9A, 0x3C, 115} // 중간 α0.45
@@ -58,7 +63,7 @@ const (
 	labelKnobScale    = 0.5
 	labelBtnScale     = 0.45
 	labelPadScale     = 0.6
-	labelTitleScale   = 1.0
+	labelTitleScale   = 1.6 // JANGDAN 타이틀(스펙: 1.0 → 1.6)
 	labelSectionScale = 0.5
 	dispBassScale     = 0.5
 	dispBottomScale   = 0.6
@@ -176,6 +181,7 @@ type View struct {
 	strokeOpts vector.StrokeOptions
 	drawOpts   vector.DrawPathOptions
 	scopeBytes [4 * scopeSamples]byte
+	scopeF32   [scopeSamples]float32
 	scratch    [40]byte
 }
 
@@ -262,7 +268,7 @@ func newView(l *core.DeviceLayout) (*View, error) {
 		if !ok {
 			return nil, fmt.Errorf("device: 노브 %q의 알 수 없는 섹션 %q", k.Name, k.Section)
 		}
-		v.knobs = append(v.knobs, knob{name: k.Name, sec: sec, cx: k.CX, cy: k.CY, r: k.R, id: id})
+		v.knobs = append(v.knobs, knob{name: k.Name, label: knobLabel(sec, k.Name), sec: sec, cx: k.CX, cy: k.CY, r: k.R, id: id})
 	}
 	for _, b := range l.Buttons {
 		sec, ok := secOf[b.Section]
