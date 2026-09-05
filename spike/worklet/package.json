@@ -1,0 +1,13 @@
+{
+  "name": "jangdan-spike-worklet",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bash build.sh",
+    "serve": "node serve.mjs",
+    "measure": "node measure.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}
