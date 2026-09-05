@@ -54,6 +54,7 @@ type Bridge interface {
 	SeedWord() string                      // DOM 오버레이의 시드 단어(빈 문자열 가능)
 	ReducedMotion() bool                   // prefers-reduced-motion
 	Hidden() bool                          // document.hidden — 렌더 정지 판단
+	CleanScreen() bool                     // 클린 스크린 토글(DOM 버튼) — 뷰가 잡동사니를 숨긴다
 	WallClock() (hour, min, sec int)       // 로컬 벽시계(벽시계 드롭용)
 	Frame(ms float64)                      // 계측: Update 시작~Draw 끝
 	FirstFrame()

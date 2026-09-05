@@ -192,6 +192,7 @@ func (g *game) Update() error {
 		}
 	}
 	g.ctx.Tick = g.ctx.Bridge.Tick()
+	g.ctx.CleanScreen = g.ctx.Bridge.CleanScreen()
 	g.updateIntegration()
 
 	switch g.mode {
@@ -250,6 +251,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	installShare(g)
 	if err := ebiten.RunGame(g); err != nil {
 		panic(err)
 	}

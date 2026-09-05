@@ -468,7 +468,10 @@
   const reducedMotionQ = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
   const wallOut = [0, 0, 0];
 
+  let cleanScreen = false; // 클린 스크린(UI 잡동사니 숨김) — Go가 매 프레임 읽는다
   window.jd = {
+    cleanScreen() { return cleanScreen; },
+    setCleanScreen(b) { cleanScreen = !!b; document.body.classList.toggle('clean', cleanScreen); return cleanScreen; },
     asset(name) { return assetBytes.get(name) || null; },
     assetsReady() { return assetsState; },
     start,

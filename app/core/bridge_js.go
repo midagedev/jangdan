@@ -121,6 +121,8 @@ func (j *jsBridge) WallClock() (int, int, int) {
 	return intOf(a.Index(0)), intOf(a.Index(1)), intOf(a.Index(2))
 }
 
+func (j *jsBridge) CleanScreen() bool { return j.b.Call("cleanScreen").Truthy() }
+
 func (j *jsBridge) Frame(ms float64)        { j.b.Call("frame", ms) }
 func (j *jsBridge) FirstFrame()             { j.b.Call("firstFrame") }
 func (j *jsBridge) AllocPerFrame(b float64) { j.b.Call("allocPerFrame", b) }
@@ -142,6 +144,7 @@ func (nopBridge) Replay(float64)                           {}
 func (nopBridge) SeedWord() string                         { return "" }
 func (nopBridge) ReducedMotion() bool                      { return false }
 func (nopBridge) Hidden() bool                             { return false }
+func (nopBridge) CleanScreen() bool                        { return false }
 func (nopBridge) WallClock() (int, int, int)               { return 0, 0, 0 }
 func (nopBridge) Frame(float64)                            {}
 func (nopBridge) FirstFrame()                              {}

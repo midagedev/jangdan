@@ -23,6 +23,7 @@ func (nopBridge) Replay(float64)                           {}
 func (nopBridge) SeedWord() string                         { return "" }
 func (nopBridge) ReducedMotion() bool                      { return false }
 func (nopBridge) Hidden() bool                             { return false }
+func (nopBridge) CleanScreen() bool                        { return false }
 func (nopBridge) WallClock() (int, int, int)               { return 0, 0, 0 }
 func (nopBridge) Frame(float64)                            {}
 func (nopBridge) FirstFrame()                              {}

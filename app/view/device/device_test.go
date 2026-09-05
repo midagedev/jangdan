@@ -38,6 +38,7 @@ func (f *fakeBridge) Replay(float64)             {}
 func (f *fakeBridge) SeedWord() string           { return "" }
 func (f *fakeBridge) ReducedMotion() bool        { return false }
 func (f *fakeBridge) Hidden() bool               { return false }
+func (f *fakeBridge) CleanScreen() bool          { return false }
 func (f *fakeBridge) WallClock() (int, int, int) { return 0, 0, 0 }
 func (f *fakeBridge) Frame(float64)              {}
 func (f *fakeBridge) FirstFrame()                {}
