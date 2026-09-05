@@ -1,4 +1,4 @@
-# cf/wrangler.toml — 계측 리포트 수신 Worker (jangdan-reports)
+# cf/wrangler.toml — 계측 리포트 수신 + 공유 세션 저장 Worker (jangdan-reports)
 # 배포: cd cf && npx wrangler deploy      (자격증명은 ~/.zshrc의 CLOUDFLARE_API_TOKEN — 레포에 넣지 않는다)
 # KV: npx wrangler kv namespace create REPORTS  → 아래 id 채움
 name = "jangdan-reports"
@@ -8,6 +8,10 @@ compatibility_date = "2026-09-01"
 [[kv_namespaces]]
 binding = "REPORTS"
 id = "ec473caf8b0d465988350efb058e1a04"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "6a08c8404ec7403791e5a365a0d95371"
 
 [observability]
 enabled = true
