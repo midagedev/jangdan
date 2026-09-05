@@ -137,8 +137,8 @@ try {
   const firstSoundMs = await page.evaluate(() => window.__jdStats().firstSoundMs);
 
   // --- 호스트 검증 2: cmd → 12비트 양자화 미러. SetParam CutoffA(id 1) = 0.9 ---
-  const paramAt = await page.evaluate(() => window.jd.cmd(0, 1, 0, 0, 0, 0.9, 0));
-  const paramMirror = await page.evaluate(() => window.jd.param(1));
+  const paramAt = await page.evaluate(() => window.jd.cmd(0, 31, 0, 0, 0, 0.9, 0)); // MASTER(31) — 레지던트가 움직이지 않는 파라미터(CutoffA는 에너지 곡선이 덮어써 거짓 FAIL)
+  const paramMirror = await page.evaluate(() => window.jd.param(31));
   const paramExpected = Math.fround(3686 / 4095); // quantN(0.9)=3686 — 엔진 양자화와 동일
   const paramOk = paramMirror === paramExpected;
 
@@ -149,7 +149,7 @@ try {
     const st = await window.jd.debugStateGet();
     return { block: st.block, bytes: Array.from(st.bytes) };
   });
-  const stateN = stateRound.bytes[4] | (stateRound.bytes[5] << 8); // params[1] u16 LE @ offset 2+2
+  const stateN = stateRound.bytes[64] | (stateRound.bytes[65] << 8); // params[31] u16 LE @ offset 2+2*31
   const stateOk = stateN === 3686 && Math.fround(stateN / 4095) === paramMirror;
 
   // --- 호스트 검증 4: 리플레이. bar 0 키프레임이 있으므로 세션 초반에도 가능하다.

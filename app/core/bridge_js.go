@@ -46,13 +46,13 @@ func (j *jsBridge) Tick() Tick {
 		return Tick{}
 	}
 	return Tick{
-		Started: t.Get("started").Bool(),
-		Block:   t.Get("block").Float(),
-		Step:    t.Get("step").Int(),
-		Bar:     uint32(t.Get("bar").Int()),
-		Flags:   uint32(t.Get("flags").Int()),
-		Peak:    float32(t.Get("peak").Float()),
-		CtxTime: t.Get("ctxTime").Float(),
+		Started: t.Get("started").Truthy(),
+		Block:   floatOf(t.Get("block")),
+		Step:    intOf(t.Get("step")),
+		Bar:     uint32(intOf(t.Get("bar"))),
+		Flags:   uint32(intOf(t.Get("flags"))),
+		Peak:    float32(floatOf(t.Get("peak"))),
+		CtxTime: floatOf(t.Get("ctxTime")),
 	}
 }
 
@@ -65,33 +65,60 @@ func (j *jsBridge) Scope(dst []byte) bool {
 }
 
 func (j *jsBridge) Param(id engine.ParamID) float32 {
-	return float32(j.b.Call("param", int(id)).Float())
+	return float32(floatOf(j.b.Call("param", int(id))))
+}
+
+func floatOf(v js.Value) float64 {
+	if v.Type() == js.TypeNumber {
+		return v.Float()
+	}
+	return 0
 }
 
 func (j *jsBridge) BassStep(p engine.Part, step int) (uint8, uint8) {
-	v := j.b.Call("bassStep", int(p), step).Int()
+	v := intOf(j.b.Call("bassStep", int(p), step))
 	return uint8(v & 0xFF), uint8(v >> 8)
 }
 
 func (j *jsBridge) DrumStep(p engine.Part, step int) uint8 {
-	return uint8(j.b.Call("drumStep", int(p), step).Int())
+	return uint8(intOf(j.b.Call("drumStep", int(p), step)))
 }
 
-func (j *jsBridge) Muted(p engine.Part) bool { return j.b.Call("muted", int(p)).Int() != 0 }
-func (j *jsBridge) Slot(p engine.Part) uint8 { return uint8(j.b.Call("slot", int(p)).Int()) }
+func (j *jsBridge) Muted(p engine.Part) bool { return intOf(j.b.Call("muted", int(p))) != 0 }
+func (j *jsBridge) Slot(p engine.Part) uint8 { return uint8(intOf(j.b.Call("slot", int(p)))) }
+
+// intOf — 호스트가 number 대신 boolean/undefined를 돌려줘도 패닉하지 않는다(2026-09-05: jd.muted가
+// boolean을 돌려줘 기기 뷰 첫 Draw에서 "call of Value.Int on boolean" 패닉으로 앱이 죽었다).
+func intOf(v js.Value) int {
+	switch v.Type() {
+	case js.TypeNumber:
+		return v.Int()
+	case js.TypeBoolean:
+		if v.Bool() {
+			return 1
+		}
+	}
+	return 0
+}
 
 func (j *jsBridge) Telemetry(ev string, v float64) { j.b.Call("telemetry", ev, v) }
 func (j *jsBridge) Replay(sec float64)             { j.b.Call("replay", sec) }
-func (j *jsBridge) SeedWord() string               { return j.b.Call("seedWord").String() }
-func (j *jsBridge) ReducedMotion() bool            { return j.b.Call("reducedMotion").Bool() }
-func (j *jsBridge) Hidden() bool                   { return j.b.Call("hidden").Bool() }
+func (j *jsBridge) SeedWord() string {
+	v := j.b.Call("seedWord")
+	if v.Type() != js.TypeString {
+		return ""
+	}
+	return v.String()
+}
+func (j *jsBridge) ReducedMotion() bool { return j.b.Call("reducedMotion").Truthy() }
+func (j *jsBridge) Hidden() bool        { return j.b.Call("hidden").Truthy() }
 
 func (j *jsBridge) WallClock() (int, int, int) {
 	a := j.b.Call("wallClock")
 	if !a.Truthy() || a.Length() < 3 {
 		return 0, 0, 0
 	}
-	return a.Index(0).Int(), a.Index(1).Int(), a.Index(2).Int()
+	return intOf(a.Index(0)), intOf(a.Index(1)), intOf(a.Index(2))
 }
 
 func (j *jsBridge) Frame(ms float64)        { j.b.Call("frame", ms) }
