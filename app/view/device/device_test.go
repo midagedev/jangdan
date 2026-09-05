@@ -651,3 +651,102 @@ func TestScopeGain(t *testing.T) {
 		}
 	}
 }
+
+// — 계약↔단언: 스코프 DC 제거(2차 비전 처방 — 하이패스·트리거) —
+
+func TestScopeHighpass(t *testing.T) {
+	// DC 0.5 상수 입력 → 출력 평균 |y| < 0.02. 하이패스 상태는 0에서 출발(앱 부팅과 동일)하므로
+	// 첫 창들은 과도기다 — 20Hz 계수의 감쇠 시정수(≈385샘플)만큼 돌린 뒤 마지막 창으로 판정한다.
+	// 실기기에서는 상태가 프레임 간 유지되므로 부팅 수십 ms 후 항상 정상 상태다.
+	var x1, y1 float32
+	const windows = 8
+	for i := 0; i < windows*scopeSamples; i++ {
+		y := hpStep(0.5, x1, y1)
+		x1, y1 = 0.5, y
+	}
+	sum := 0.0
+	for i := 0; i < scopeSamples; i++ {
+		sum += math.Abs(float64(y1))
+		y1 = hpStep(0.5, x1, y1)
+		x1 = 0.5
+	}
+	if mean := sum / scopeSamples; mean >= 0.02 {
+		t.Fatalf("DC 0.5 정상 상태 평균 |y| = %v(< 0.02 예상)", mean)
+	}
+	// 교대 입력(+0.5/−0.5)은 통과시킨다 — 하이패스가 교류 성분을 죽이지 않는다는 최소 확인.
+	x1, y1 = 0, 0
+	peak := float32(0)
+	for i := 0; i < 4*scopeSamples; i++ {
+		x := float32(0.5)
+		if i%2 == 1 {
+			x = -0.5
+		}
+		y1 = hpStep(x, x1, y1)
+		x1 = x
+		if y1 > peak {
+			peak = y1
+		} else if -y1 > peak {
+			peak = -y1
+		}
+	}
+	if peak < 0.5 {
+		t.Fatalf("교대 입력 통과 peak = %v(≥ 0.5 예상 — 교류 성분 보존)", peak)
+	}
+}
+
+func TestScopeTrigger(t *testing.T) {
+	if i := scopeTrigger(make([]float32, 8)); i != 0 {
+		t.Fatalf("무신호(전부 0) 트리거 %d(0 예상)", i)
+	}
+	if i := scopeTrigger([]float32{0.5, 0.2, -0.1, -0.3}); i != 0 {
+		t.Fatalf("양수만 있는 창 트리거 %d(0 예상)", i)
+	}
+	if i := scopeTrigger([]float32{-0.3, -0.1, 0.2, 0.5, 0.1, -0.2, -0.4}); i != 2 {
+		t.Fatalf("상승 제로크로싱 트리거 %d(2 예상)", i)
+	}
+	// 하강 전이(양→음)는 트리거가 아니다 — 그다음 상승(인덱스 4)을 잡는다.
+	if i := scopeTrigger([]float32{0.5, 0.2, -0.1, -0.3, 0.1}); i != 4 {
+		t.Fatalf("하강 후 재상승 트리거 %d(4 예상)", i)
+	}
+}
+
+func TestScopeRemoveMean(t *testing.T) {
+	// 상수(DC) 창 → 전부 0: 자동 이득이 오프셋을 증폭할 수 없다.
+	b := make([]float32, 64)
+	for i := range b {
+		b[i] = 0.5
+	}
+	removeMean(b)
+	for i, s := range b {
+		if s != 0 {
+			t.Fatalf("DC 창 제거 후 b[%d] = %v(0 예상)", i, s)
+		}
+	}
+	// 비대칭 창(한쪽으로 치우친 혹) → 평균 0: 중앙선 계약의 축.
+	b = []float32{1, 1, 1, -3}
+	removeMean(b)
+	sum := float32(0)
+	for _, s := range b {
+		sum += s
+	}
+	if sum != 0 {
+		t.Fatalf("제거 후 합 %v(0 예상)", sum)
+	}
+	// 교류 성분은 크기를 보존한다(진폭 축소 없음).
+	b = []float32{0.5, -0.5, 0.5, -0.5}
+	removeMean(b)
+	if b[0] != 0.5 || b[1] != -0.5 {
+		t.Fatalf("교류 창 변형 %v([0.5 -0.5 ...] 예상)", b)
+	}
+}
+
+// — 계약↔단언: 스텝 버튼 면 색(게이트 1의 색 축 — 주황 면 존재 R−B ≥ 40) —
+
+func TestStepFaceColor(t *testing.T) {
+	if d := int(colStepFace.R) - int(colStepFace.B); d < 40 {
+		t.Fatalf("스텝 면 R−B = %d(≥ 40 예상)", d)
+	}
+	if g := int(colStepFace.G); g < 60 || g > 130 {
+		t.Fatalf("스텝 면 G = %d(패널 중앙값 (146,94,59) 대역 예상)", g)
+	}
+}

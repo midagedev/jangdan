@@ -27,25 +27,27 @@ import (
 
 // 수치 계약(스펙 origin). 픽셀 좌표는 여기에 없다 — 레이아웃 JSON이 소유한다.
 const (
-	hitKnobPad   = 6     // 노브 히트 여유(px, 중심 거리 r+6)
-	hitRectPad   = 4     // rect 컨트롤 히트 여유(px)
-	dragRange    = 200.0 // 노브 세로 드래그: 200px = Δ1.0
-	tapMoveMax   = 6.0   // 탭 판정 최대 이동(px)
-	tapDurMax    = 0.25  // 탭 판정 최대 눌림(초)
-	padHoldMute  = 0.5   // 패드 길게 누르기 뮤트 임계(초)
-	padLitDur    = 0.12  // 패드 탭 lit(초)
-	sweepSendMin = 0.05  // 스윕 중 SetParam 최소 송신 간격(초)
-	knobLitBoost = 1.12  // 잡힌 노브 밝기 배수
-	padMuteScale = 0.55  // 뮤트 패드 ColorScale(오버레이 알파 0.45로 환원)
-	dropPulseAmp = 0.35  // Build 중 DROP 버튼 펄스 진폭(+0..35%)
-	dropPulseHz  = 1.0   // 펄스 주파수
-	overlayLitA  = 0.18  // lit 반투명 흰 사각 알파
-	knobDyMain   = 18    // 노브 라벨 오프셋: cy + r + 18(베이스라인·fx — 눈금 겹침에서 +14px)
-	knobDyDrums  = 14    // 드럼 노브 라벨 오프셋(라벨판이 좁아 +10px)
-	plateInset   = 6     // 섹션 이름판 왼쪽 정렬 들여쓰기(px)
-	titleShiftX  = 40    // JANGDAN x 이동(좌상단 DOM 시드 입력 회피)
-	labelFitPad  = 4     // 버튼 라벨 폭 예산 = rect 폭 − 4
-	labelFloor   = 0.3   // 라벨 축소 하한
+	hitKnobPad    = 6     // 노브 히트 여유(px, 중심 거리 r+6)
+	hitRectPad    = 4     // rect 컨트롤 히트 여유(px)
+	dragRange     = 200.0 // 노브 세로 드래그: 200px = Δ1.0
+	tapMoveMax    = 6.0   // 탭 판정 최대 이동(px)
+	tapDurMax     = 0.25  // 탭 판정 최대 눌림(초)
+	padHoldMute   = 0.5   // 패드 길게 누르기 뮤트 임계(초)
+	padLitDur     = 0.12  // 패드 탭 lit(초)
+	sweepSendMin  = 0.05  // 스윕 중 SetParam 최소 송신 간격(초)
+	knobLitBoost  = 1.12  // 잡힌 노브 밝기 배수
+	padMuteScale  = 0.55  // 뮤트 패드 ColorScale(오버레이 알파 0.45로 환원)
+	dropPulseAmp  = 0.35  // Build 중 DROP 버튼 펄스 진폭(+0..35%)
+	dropPulseHz   = 1.0   // 펄스 주파수
+	overlayLitA   = 0.18  // lit 반투명 흰 사각 알파
+	knobDyMain    = 18    // 노브 라벨 오프셋: cy + r + 18(베이스라인·fx — 눈금 겹침에서 +14px)
+	knobDyDrums   = 14    // 드럼 노브 라벨 오프셋(라벨판이 좁아 +10px)
+	plateInset    = 8     // 섹션 이름판 왼쪽 정렬 들여쓰기(px) — 판 테두리가 rect 안쪽 ≈6px에 있어 6이면 첫 글자가 테두리에 걸린다(2차 비전 처방)
+	titleShiftX   = 40    // JANGDAN x 이동(좌상단 DOM 시드 입력 회피)
+	labelFitPad   = 4     // 버튼 라벨 폭 예산 = rect 폭 − 4
+	labelFloor    = 0.3   // 라벨 축소 하한
+	plateBandW    = 6     // 이름판 좌측 밴드 폭(px) — 게이트 2의 검사 밴드와 같은 폭. 페인팅 잔글자를 판색으로 덮는다
+	stepFaceInset = 2     // 스텝 버튼 면 들여쓰기(px, rect 안쪽) — 면은 앱이 그린다(16번 자리가 스크럽으로 지워짐)
 )
 
 // 색 계약(스펙 hex 그대로).
@@ -56,6 +58,24 @@ var (
 	colLEDOn  = color.NRGBA{0xFF, 0x9A, 0x3C, 255} // 켜짐 α1.0
 	colLEDMid = color.NRGBA{0xFF, 0x9A, 0x3C, 115} // 중간 α0.45
 	colLEDOff = color.NRGBA{0x2A, 0x26, 0x22, 230} // 꺼짐 α0.9
+
+	// 앱이 그리는 채움색 — 전부 패널에서 잰 중앙값(2026-09-06 실측). 새 색 발명이 아니라 패널 복원이다.
+	// 스텝 면: 1..15의 중앙값이 전부 (146,94,59)로 동일하다. wire.py의 2계열(4의 배수 밝은 주황
+	// (200,110,40)/나머지 (120,80,50))은 페인팅에 남아 있지 않고, 그대로 쓰면 R max/min 게이트(≤1.3)를
+	// 깬다(200/120=1.67) — 측정 중앙값 단일색으로 통일(보고서 참조).
+	colStepFace = color.NRGBA{0x92, 0x5E, 0x3B, 0xFF} // #925E3B = (146,94,59) — 16스텝 버튼 면 공통
+	// 이름판 좌측 밴드 패치색 — bassA·bassB·drums·fx 순. 판 내부 중앙값(테두리·잔글자 제외 영역).
+	colPlateBand = [4]color.NRGBA{
+		{0xDB, 0xD3, 0xBF, 0xFF}, // (219,211,191)
+		{0xDB, 0xD3, 0xBF, 0xFF}, // (219,211,191)
+		{0xDA, 0xD0, 0xB6, 0xFF}, // (218,208,182)
+		{0xE8, 0xDC, 0xC1, 0xFF}, // (232,220,193)
+	}
+	// 베이스라인 표시창 창색 — 창 청정부(하단 20px) 중앙값. 불투명 채움으로 페인팅 잔글자("68."류)를 차단.
+	colDispWin = [2]color.NRGBA{
+		{0x44, 0x44, 0x48, 0xFF}, // basslineA (68,68,72)
+		{0x40, 0x40, 0x46, 0xFF}, // basslineB (64,64,70)
+	}
 )
 
 // 라벨·표시 스케일.
@@ -182,6 +202,8 @@ type View struct {
 	drawOpts   vector.DrawPathOptions
 	scopeBytes [4 * scopeSamples]byte
 	scopeF32   [scopeSamples]float32
+	scopeHPX   float32 // 스코프 하이패스 상태 x[n−1] — 프레임 간 유지(DC 제거가 창 경계에서 리셋되지 않게)
+	scopeHPY   float32 // 스코프 하이패스 상태 y[n−1]
 	scratch    [40]byte
 }
 
