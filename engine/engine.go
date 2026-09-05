@@ -12,7 +12,8 @@ package engine
 const SampleRate = 48000
 const Block = 128
 
-// bassStep — 베이스 패턴 한 스텝. note 0..MaxNote(24 = C3), flags = StepGate|StepSlide|StepAccent.
+// bassStep — 베이스 패턴 한 스텝. note 0..MaxNote = 도수 표기 octave*7+degree(harmony.go:
+// 0 = 코드 루트(옥타브 0), 7 = 옥타브 1 루트), flags = StepGate|StepSlide|StepAccent.
 type bassStep struct {
 	note  uint8
 	flags uint8
@@ -101,15 +102,39 @@ func (e *Engine) Reset(seed uint32) {
 
 // genInitialPatterns — seed로 슬롯 0 패턴을 채운다(나머지 슬롯은 빈 패턴 = 게이트 없음).
 // 레지던트가 곧 덮어쓰지만, 손이 없는 첫 300ms에도 소리가 나야 한다.
+// 베이스 note는 도수(harmony.go): A = 옥타브 1(7..13), B = 옥타브 0(0..6). 도수 가중
+// 루트 0.5 · 코드 톤(2·4) 0.3 · 경과음(1·3·5·6) 0.2 — 첫 바(레지던트가 덮기 전)부터
+// 조성 안의 소리가 난다. 도수는 코드 기준이라 가중표는 마디·코드 트랙과 무관하다.
 func (e *Engine) genInitialPatterns() {
-	// 마이너 펜타토닉(반음 오프셋) 위에서 베이스 A: 밀도 0.75, 액센트 0.25, 슬라이드 0.15
-	scale := [...]uint8{0, 3, 5, 7, 10, 12, 15, 17}
+	// 도수 분포(8비트 0..255): <128 루트(0.5) · <217 3rd(2) · <230 5th(4) — 코드 톤
+	// 합계 ≈0.3 · <243/256/255 경과음 1·3·5(≈0.05씩) · 나머지 6(7th 경과).
+	// 밀도 0.75·액센트 0.25·슬라이드 0.15는 각각 독립 비트 필드에서(상관 없게).
 	for p := 0; p < 2; p++ {
 		for st := 0; st < Steps; st++ {
 			v := e.rng.next()
-			n := 24 + scale[(v>>8)&7] - 12 // C2 기준
+			var deg uint8
+			switch r := v & 0xFF; {
+			case r < 128:
+				deg = 0
+			case r < 217:
+				deg = 2
+			case r < 230:
+				deg = 4
+			case r < 243:
+				deg = 1
+			case r < 252:
+				deg = 3
+			case r < 255:
+				deg = 5
+			default:
+				deg = 6
+			}
+			n := deg
+			if p == 0 {
+				n = deg + 7 // 베이스 A는 옥타브 1
+			}
 			f := uint8(0)
-			if v&0xFF < 192 {
+			if (v>>8)&0xFF < 192 {
 				f |= StepGate
 			}
 			if (v>>16)&0xFF < 64 {
@@ -391,16 +416,47 @@ func (e *Engine) onStep(st int, first bool) {
 			continue
 		}
 		s := e.bassPat[p][e.slot[p]][st]
-		if s.flags&StepGate != 0 {
-			next := e.bassPat[p][e.slot[p]][(st+1)&(Steps-1)]
-			slideTo := s.flags&StepSlide != 0 && next.flags&StepGate != 0
-			e.bass[p].noteOn(s.note, s.flags&StepAccent != 0, slideTo, next.note, e.samplesPerStep)
-			e.flags |= 1 << p
-			if s.flags&StepAccent != 0 {
-				e.flags |= FlagAccent
-			}
-		} else {
+		if s.flags&StepGate == 0 {
 			e.bass[p].noteOff()
+			continue
+		}
+		accent := s.flags&StepAccent != 0
+		deg, cflags := e.Chord(int(e.bar))
+		switch e.mode[p] {
+		case ModeArp:
+			// ARP — 게이트된 스텝마다 코드 톤 하나(옥타브는 패턴 note/7, 도수는
+			// 아르페지오가). 슬라이드 목표 = 다음 게이트 스텝의 톤(arpNotes).
+			note, tgt := e.arpNotes(p, st, s.note, deg, cflags)
+			e.bass[p].noteOn(note, accent, s.flags&StepSlide != 0, tgt, e.samplesPerStep)
+		case ModeChord:
+			// CHORD — 3음 패러포닉. 7th 없음 = 루트·3·5(도수 0·2·4), 7th = 3·5·7
+			// (2·4·6 — 루트는 베이스 A가 맡는다). 슬라이드는 무시: 노트온만(voice.go 계약).
+			oct := (s.note / NumDegrees) * NumDegrees
+			d1, d2, d3 := oct+0, oct+2, oct+4
+			if cflags&ChordSeventh != 0 {
+				d1, d2, d3 = oct+2, oct+4, oct+6
+			}
+			e.bass[p].noteOnChord(
+				ResolveNote(e.keyRoot, deg, d1),
+				ResolveNote(e.keyRoot, deg, d2),
+				ResolveNote(e.keyRoot, deg, d3),
+				accent)
+		default:
+			// BASS — 패턴 도수를 그대로(코드 트랙이 화성을 정한다). 슬라이드 목표는
+			// 다음 스텝이 속한 마디의 코드로 해석(st 15 → 다음 바).
+			note := ResolveNote(e.keyRoot, deg, s.note)
+			next := e.bassPat[p][e.slot[p]][(st+1)&(Steps-1)]
+			nextDeg := deg
+			if st == Steps-1 {
+				nextDeg, _ = e.Chord(int(e.bar) + 1)
+			}
+			nextNote := ResolveNote(e.keyRoot, nextDeg, next.note)
+			slideTo := s.flags&StepSlide != 0 && next.flags&StepGate != 0
+			e.bass[p].noteOn(note, accent, slideTo, nextNote, e.samplesPerStep)
+		}
+		e.flags |= 1 << p
+		if accent {
+			e.flags |= FlagAccent
 		}
 	}
 	for v := 0; v < NumDrums; v++ {
@@ -414,6 +470,93 @@ func (e *Engine) onStep(st int, first bool) {
 			e.flags |= 1 << part
 		}
 	}
+}
+
+// arpStep — 아르페지오 진행 규칙의 순수 계산(진행 커밋·슬라이드 peek 공용 — 한 몫의
+// 로직이 두 경로에 쓰인다). (idx, down)에서 dir 방향으로 한 스텝 진행한 (idx', down').
+// DirDown은 감소 순환(0 → n-1 랩), DirUpDown은 삼각파(꼭대기·바닥에서 반전).
+func arpStep(idx uint8, down bool, dir uint8, n uint8) (uint8, bool) {
+	if idx >= n {
+		idx = n - 1
+	}
+	switch dir {
+	case DirUp:
+		idx++
+		if idx >= n {
+			idx = 0
+		}
+	case DirDown:
+		if idx == 0 {
+			idx = n - 1
+		} else {
+			idx--
+		}
+	default: // DirUpDown — n ≥ 3이라 1·n-2가 항상 유효
+		if down {
+			if idx == 0 {
+				return 1, false
+			}
+			return idx - 1, true
+		}
+		if idx == n-1 {
+			return n - 2, true
+		}
+		return idx + 1, false
+	}
+	return idx, down
+}
+
+// arpNotes — ARP 모드의 이번 톤 반음과 슬라이드 목표 반음, 그리고 진행(arpIdx/arpDown
+// 커밋). 순서 계약(§12.1): Up [r,3,5,r,3,5] · Down [5,3,r,…] · UpDown [r,3,5,3,r,3] —
+// 하강은 진입이 꼭대기에서 시작하도록 연주 *전*에 한 칸 진행하고, 상승 계열은 연주
+// *뒤*에 진행한다. 게이트 없는 스텝은 진행하지 않고(호출 자체가 게이트된 스텝에서만
+// 일어난다), 바 경계·코드 변경에서 리셋하지 않는다(Apply의 모드 변경 리셋만).
+// 7th 해제로 톤 수가 4→3으로 줄면 idx를 n-1로 클램프해 순환이 끊기지 않게 한다.
+func (e *Engine) arpNotes(p int, st int, patNote, chordDeg, cflags uint8) (note, tgt uint8) {
+	n := ChordTones(cflags)
+	seventh := cflags&ChordSeventh != 0
+	idx, down := e.arpIdx[p], e.arpDown[p]
+	if idx >= n {
+		idx = n - 1
+		e.arpIdx[p] = idx
+	}
+	if e.dir[p] == DirDown {
+		idx, down = arpStep(idx, down, DirDown, n) // 연주 전 진행(꼭대기 진입)
+	}
+	oct := (patNote / NumDegrees) * NumDegrees
+	note = ResolveNote(e.keyRoot, chordDeg, oct+ChordToneDeg(idx, seventh))
+	// 다음 게이트 스텝이 연주할 톤(peek) — 이번 스텝의 진행까지 반영한 인덱스에서
+	// 읽는다(Down은 이미 진행 완료 상태, 상승 계열은 진행 후 상태를 순수 계산).
+	tIdx, tDown := arpStep(idx, down, e.dir[p], n)
+	tgt = e.arpPeek(p, st, tIdx)
+	if e.dir[p] == DirDown {
+		e.arpIdx[p], e.arpDown[p] = idx, down
+	} else {
+		e.arpIdx[p], e.arpDown[p] = tIdx, tDown
+	}
+	return note, tgt
+}
+
+// arpPeek — 다음 게이트 스텝이 연주할 반음(arpIdx·arpDown은 바꾸지 않는다). idx는
+// 이번 스텝의 진행까지 반영한 값. 16스텝 안에는 반드시 게이트가 있다(이번 스텝 자신이
+// 다음 바에 돌아온다) — 루프가 다 돌면 0을 반환한다(정규화 계약, 도달 불가).
+// 다음 바의 스텝은 pendingSlot 패턴·그 바의 코드에서 읽는다(바 경계에서 적용될 값).
+func (e *Engine) arpPeek(p int, st int, idx uint8) uint8 {
+	for k := 1; k <= Steps; k++ {
+		ust := st + k
+		ss := ust & (Steps - 1)
+		bar, slot := e.bar, e.slot[p]
+		if ust >= Steps {
+			bar, slot = e.bar+1, e.pendingSlot[p]
+		}
+		if e.bassPat[p][slot][ss].flags&StepGate == 0 {
+			continue
+		}
+		deg, cflags := e.Chord(int(bar))
+		oct := (e.bassPat[p][slot][ss].note / NumDegrees) * NumDegrees
+		return ResolveNote(e.keyRoot, deg, oct+ChordToneDeg(idx, cflags&ChordSeventh != 0))
+	}
+	return 0
 }
 
 // sample — 보이스 합 → FX 체인. 베이스라인에는 드롭 컷오프 부스트(옥타브), FX에는 드롭 드라이브 부스트.

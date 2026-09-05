@@ -3,8 +3,12 @@
 //	init(seed)                      New/Reset — 상태 0, 계수 기본
 //	setParam(k int, q float32)      k = BTune..BOct(0..7), q = 양자화된 0..1
 //	noteOn(note, accent, slide, nextNote, stepSamples)  스텝 트리거. slide면 stepSamples 동안 nextNote로 포르타멘토
+//	noteOnChord(n1, n2, n3, accent) CHORD 모드 3음 패러포닉 트리거(아래 계약)
 //	noteOff()                       게이트 오프(지수 릴리즈)
 //	process(dropOct float32) float32   샘플 1개. dropOct(0..1)은 컷오프 +dropOct 옥타브 부스트
+//
+// note 인자 도메인(Phase 2, harmony.go): 엔진이 ResolveNote 결과(C1 기준 반음
+// 0..MaxSemis 48)를 넣는다. 클램프도 MaxSemis 기준(구 MaxNote 36이 아니다).
 //
 // 제품 보이스(docs/impl-plan-2026-09-05.md §2.6): 톱니/사각 PolyBLEP 오실레이터, 다이오드
 // 래더 4폴(filter.go), 앰프·필터 디케이 엔벨로프, 액센트(레벨 +0.6·BAccent, 필터 깊이
@@ -15,6 +19,12 @@
 // 오차 ~1.5e-4가 매 샘플 곱으로 누적되면 5538샘플(130BPM 한 스텝)에서 주파수 오차
 // ~48%로 커진다(τ 1000ms→469ms 사고와 같은 계열 — 감쇠 계수 국소 전개 규칙의 원인).
 // 절대 오프셋 방식의 오차는 exp2 1회분(~0.26센트)에 머문다.
+//
+// CHORD 모드(§12.1): 오실레이터 3개가 필터 하나 앞에서 합산된다(스케일 0.5 — 3음
+// 합이 단음 대비 진폭 상한을 넘지 않게). 엔벨로프·액센트·필터는 단음 noteOn과 같은
+// 것을 공유한다. 슬라이드는 없다 — 노트온만(패러포닉 슬라이드는 화성을 흐려 제외).
+// BASS/ARP 모드에서 보조 오실레이터는 기여 0이다: process가 chord3 분기로 항을
+// 아예 더하지 않는다(+0이 아니라 분기 — 단음 경로 비트 동일성 게이트가 지킨다).
 //
 // 릴리즈: 계약 문장은 "8ms 지수 릴리즈", 수치 게이트는 384샘플 ≤40%·960샘플 ≤5%.
 // τ=384샘플이면 960샘플에서 e^−2.5 = 8.2%로 5% 게이트를 만족하지 못한다(스펙 내부
@@ -32,6 +42,12 @@ type bassVoice struct {
 	slideN   int32   // 남은 슬라이드 샘플 수
 	note     uint8   // 직전 기준 노트(슬라이드 잔여 오프셋 환산용)
 	square   bool    // BWave ≥ 0.5
+
+	// 패러포닉 보조 오실레이터(CHORD 모드 전용). BASS/ARP에선 chord3=false라
+	// process가 이 경로를 건너뛴다(파일 주석 계약).
+	phase2, phase3 float32
+	inc2, inc3     float32
+	chord3         bool
 
 	// 엔벨로프(트리거 시 값 설정, 샘플마다 감쇠)
 	aenv, fenv float32
@@ -97,7 +113,8 @@ func (v *bassVoice) setParam(k int, q float32) {
 	}
 }
 
-// baseInc — note의 위상 증분(튠·옥타브 포함). note 0..36 → MIDI 24+note(24 = C3 = 130.81Hz).
+// baseInc — note의 위상 증분(튠·옥타브 포함). note 0..MaxSemis(48) → MIDI 24+note
+// (24 = C1 = 32.70Hz, 72 = C5 = 523.25Hz). 최대 inc ≈ 0.0109 < 0.022이라 랩 1회로 충분.
 func (v *bassVoice) baseInc(note uint8) float32 {
 	m := int32(note) + 24
 	o := float32(m-69) / 12
@@ -162,11 +179,11 @@ func corr(t, dt float32) float32 {
 }
 
 func (v *bassVoice) noteOn(note uint8, accent, slide bool, nextNote uint8, stepSamples float64) {
-	if note > MaxNote {
-		note = MaxNote
+	if note > MaxSemis {
+		note = MaxSemis // 도메인 = ResolveNote 출력 0..MaxSemis(파일 주석)
 	}
-	if nextNote > MaxNote {
-		nextNote = MaxNote
+	if nextNote > MaxSemis {
+		nextNote = MaxSemis
 	}
 	// 슬라이드 노트도 자기 음에서 시작한다(계약: "현재 노트에서 nextNote로"). 잔여
 	// 슬라이드 오프셋은 베이크해 새 노트로 점프 — 연속 슬라이드 체인에서는 직전
@@ -174,6 +191,8 @@ func (v *bassVoice) noteOn(note uint8, accent, slide bool, nextNote uint8, stepS
 	v.freezePitch()
 	v.note = note
 	v.inc0 = v.baseInc(note)
+	v.chord3 = false // 단음 경로 — 보조 오실레이터 기여 0(분기로 건너뜀, 파일 주석)
+	v.inc2, v.inc3 = 0, 0
 	if slide {
 		n := int32(stepSamples)
 		if n < 1 {
@@ -195,9 +214,55 @@ func (v *bassVoice) noteOn(note uint8, accent, slide bool, nextNote uint8, stepS
 	v.active = true
 }
 
+// noteOnChord — CHORD 모드 3음 패러포닉 트리거. 엔진이 ResolveNote 결과(C1 기준
+// 반음) 3개를 준다. 세 오실레이터가 필터 하나 앞에서 합산되고(스케일 0.5),
+// 엔벨로프·액센트·필터는 단음 noteOn과 같은 경로를 공유한다. 슬라이드는 없다 —
+// 노트온만(CHORD 모드 계약, 파일 주석).
+func (v *bassVoice) noteOnChord(n1, n2, n3 uint8, accent bool) {
+	if n1 > MaxSemis {
+		n1 = MaxSemis
+	}
+	if n2 > MaxSemis {
+		n2 = MaxSemis
+	}
+	if n3 > MaxSemis {
+		n3 = MaxSemis
+	}
+	v.freezePitch()
+	v.note = n1
+	v.inc0 = v.baseInc(n1)
+	v.inc2 = v.baseInc(n2)
+	v.inc3 = v.baseInc(n3)
+	v.chord3 = true
+	v.trigger(accent)
+	v.releasing = false
+	v.active = true
+}
+
 func (v *bassVoice) noteOff() {
 	v.freezePitch() // 포르타멘토 정지 — 현재 피치 유지
 	v.releasing = true
+}
+
+// oscSample — 위상 1개의 PolyBLEP 파형 샘플(톱니/사각). 단음과 패러포닉 합산이
+// 같은 파형 코드를 쓴다(두 경로 드리프트 금지). 곱셈-덧셈은 mul32 규칙 그대로.
+func (v *bassVoice) oscSample(ph, inc float32) float32 {
+	if v.square {
+		var osc float32
+		if ph < 0.5 {
+			osc = 1
+		} else {
+			osc = -1
+		}
+		osc = osc + corr(ph, inc) // p=0 상승 에지 보정(가산)
+		pe := ph + 0.5
+		if pe >= 1 {
+			pe -= 1
+		}
+		return osc - corr(pe, inc) // p=0.5 하강 에지 보정(감산)
+	}
+	osc := mul32(2, ph) - 1
+	return osc - corr(ph, inc) // p=1→0 하강 에지 보정(감산)
 }
 
 func (v *bassVoice) process(dropOct float32) float32 {
@@ -222,21 +287,23 @@ func (v *bassVoice) process(dropOct float32) float32 {
 	}
 	v.phase = ph
 	var osc float32
-	if v.square {
-		if ph < 0.5 {
-			osc = 1
-		} else {
-			osc = -1
+	if v.chord3 {
+		// CHORD — 보조 2오실레이터 합산(파일 주석 계약). inc2/inc3는 슬라이드가
+		// 없으므로 상수다.
+		ph2 := v.phase2 + v.inc2
+		if ph2 >= 1 {
+			ph2 -= 1
 		}
-		osc = osc + corr(ph, inc) // p=0 상승 에지 보정(가산)
-		pe := ph + 0.5
-		if pe >= 1 {
-			pe -= 1
+		v.phase2 = ph2
+		ph3 := v.phase3 + v.inc3
+		if ph3 >= 1 {
+			ph3 -= 1
 		}
-		osc = osc - corr(pe, inc) // p=0.5 하강 에지 보정(감산)
+		v.phase3 = ph3
+		sum := v.oscSample(ph, inc) + v.oscSample(ph2, v.inc2) + v.oscSample(ph3, v.inc3)
+		osc = mul32(sum, 0.5)
 	} else {
-		osc = mul32(2, ph) - 1
-		osc = osc - corr(ph, inc) // p=1→0 하강 에지 보정(감산)
+		osc = v.oscSample(ph, inc) // 단음 경로 — 보조 오실레이터 항 없음(비트 동일성)
 	}
 	// 엔벨로프 — 릴리즈 중엔 앰프만 감쇠(필터 엔벨로프 동결, τ=288샘플)
 	if v.releasing {

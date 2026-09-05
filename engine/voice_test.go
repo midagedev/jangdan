@@ -449,6 +449,98 @@ func TestVoiceNoAllocs(t *testing.T) {
 	if n := testing.AllocsPerRun(1000, func() { v.setParam(int(BDecay), 0.7) }); n != 0 {
 		t.Fatalf("setParam 할당: %v", n)
 	}
+	if n := testing.AllocsPerRun(1000, func() { v.noteOnChord(21, 24, 28, true) }); n != 0 {
+		t.Fatalf("noteOnChord 할당: %v", n)
+	}
+}
+
+// 12. CHORD 패러포닉 — noteOnChord의 세 inc는 각 톤의 baseInc와 비트 동일(같은 유도식),
+//     합산 스케일 0.5 경로의 출력은 유계. 엔벨로프·액센트 공유는 trigger 경로 재사용으로
+//     구조적으로 보장(별도 수치 게이트는 harmony_test 진폭 게이트가 담당).
+func TestVoiceChordParaphonic(t *testing.T) {
+	var v bassVoice
+	v.init(1)
+	v.setParam(int(BCutoff), 0.45)
+	v.noteOnChord(21, 24, 28, true)
+	if !v.chord3 {
+		t.Fatal("noteOnChord 뒤 chord3=false")
+	}
+	for i, want := range [...]struct{ n uint8; f *float32 }{
+		{21, &v.inc0}, {24, &v.inc2}, {28, &v.inc3},
+	} {
+		var ref bassVoice
+		ref.init(1)
+		ref.noteOn(want.n, false, false, want.n, 48000)
+		if *want.f != ref.inc0 {
+			t.Fatalf("inc[%d](반음 %d)=%g ≠ 단음 baseInc %g — 유도식 불일치", i, want.n, *want.f, ref.inc0)
+		}
+	}
+	peak := 0.0
+	for _, s := range renderVoiceN(&v, 9600) {
+		f := float64(s)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			t.Fatal("CHORD 렌더에 NaN/Inf")
+		}
+		if a := math.Abs(f); a > peak {
+			peak = a
+		}
+	}
+	if peak > 1.0 {
+		t.Fatalf("CHORD 9600샘플 peak %.4f > 1.0", peak)
+	}
+	if peak == 0 {
+		t.Fatal("CHORD 렌더가 무음 — 합산 경로 안 살아있음")
+	}
+	// noteOn(단음) 뒤에는 패러포닉 상태가 완전히 꺼진다.
+	v.noteOn(21, false, false, 21, 48000)
+	if v.chord3 || v.inc2 != 0 || v.inc3 != 0 {
+		t.Fatalf("noteOn 뒤 chord3=%v inc2=%g inc3=%g — 단음 복귀 실패", v.chord3, v.inc2, v.inc3)
+	}
+}
+
+// 13. 보조 오실레이터 비활성 기여 0 — chord3=false면 inc2/inc3/phase2/phase3 값이 무엇이든
+//     process 출력은 비트 동일(분기 계약: 항을 더하지 않는다, +0이 아님).
+func TestVoiceChordIgnoredWhenOff(t *testing.T) {
+	run := func(poison bool) []float32 {
+		var v bassVoice
+		v.init(1)
+		v.setParam(int(BCutoff), 0.45)
+		v.noteOn(21, true, true, 28, 5538) // 슬라이드 포함 경로
+		if poison {
+			v.inc2, v.inc3 = v.inc0, v.inc0
+			v.phase2, v.phase3 = 0.31, 0.73
+		}
+		return renderVoiceN(&v, 5538)
+	}
+	a, b := run(false), run(true)
+	for i := range a {
+		if math.Float32bits(a[i]) != math.Float32bits(b[i]) {
+			t.Fatalf("샘플 %d: 더미 inc2/inc3가 출력을 바꿈(%v vs %v) — 분기 계약 위반", i, a[i], b[i])
+		}
+	}
+}
+
+// 14. 노트 도메인 — noteOn의 인자는 ResolveNote 출력(0..MaxSemis 48). 36 < n ≤ 48은
+//     클램프되지 않고, 48 초과만 48로(구 MaxNote 36 클램프가 아님).
+func TestVoiceNoteDomainMaxSemis(t *testing.T) {
+	var v bassVoice
+	v.init(1)
+	v.noteOn(40, false, false, 48, 48000)
+	if v.inc0 != v.baseInc(40) {
+		t.Fatalf("noteOn(40) inc0=%g ≠ baseInc(40)=%g — 36으로 클램프된 구 도메인", v.inc0, v.baseInc(40))
+	}
+	v.noteOn(48, false, false, 0, 48000)
+	hi := v.inc0
+	v.noteOn(200, false, false, 0, 48000)
+	if v.inc0 != hi {
+		t.Fatalf("noteOn(200) inc0=%g ≠ noteOn(48)=%g — MaxSemis 클램프 실패", v.inc0, hi)
+	}
+	var slide bassVoice
+	slide.init(1)
+	slide.noteOn(0, false, true, 200, 5538) // nextNote 클램프도 MaxSemis
+	if slide.slideInc <= 0 {
+		t.Fatalf("nextNote 200 클램프 뒤 slideInc=%g — 목표가 48이어야 양수", slide.slideInc)
+	}
 }
 
 // 11. 결정론 — 같은 시퀀스(파라미터 이력 포함) 두 번은 비트 동일.
