@@ -1,8 +1,9 @@
-// jdsess — 합성 손 조작 로그로 공유 URL 길이를 재는 게이트 CLI(docs/impl-plan-2026-09-05.md §5·§10).
+// jdsess — 합성 손 조작 로그로 공유 URL 길이를 재는 게이트 CLI(docs/impl-plan-2026-09-05.md §5·§10·§12.5).
 // 5분(130 BPM 기본) 세션: 노브 200회 이동 × 중간값 20개(연속 블록, 무작위 파라미터),
-// 스텝 편집 100회, 뮤트 20회, 드롭 3회. EncodeURL 길이와 EncodeURLBudget(2000) 결과를
-// 표로 찍고 예산 결과가 2000자를 넘으면 0이 아닌 코드로 종료한다. 난수는 고정 시드
-// xorshift32 — 실행할 때마다 같은 로그(재현 게이트).
+// 스텝 편집 100회, 뮤트 20회, 드롭 3회, 코드 8마디×3사이클, 베이스 모드 12회,
+// 트랜스포트 4회, 키 1회(§12.5 — Phase 2 새 Cmd). EncodeURL 길이와
+// EncodeURLBudget(2000) 결과를 표로 찍고 예산 결과가 2000자를 넘으면 0이 아닌
+// 코드로 종료한다. 난수는 고정 시드 xorshift32 — 실행할 때마다 같은 로그(재현 게이트).
 package main
 
 import (
@@ -21,6 +22,11 @@ const (
 	stepEdits   = 100
 	muteCount   = 20
 	dropCount   = 3
+	// §12.5 — Phase 2 새 Cmd 추가분.
+	chordCycles  = 3                 // 코드 8마디 × 3사이클
+	bassModes    = 12                // 모드 12
+	transports   = 4                 // 트랜스포트 4(재생·정지 교대)
+	setKeys      = 1                 // 키 1
 	budgetChars = 2000
 )
 
@@ -46,8 +52,9 @@ func main() {
 	}
 	fmt.Printf("시드 단어  %s  seed=0x%08X\n", word, l.Seed)
 	fmt.Printf("세션       5분 130BPM  블록=%d\n", totalBlocks)
-	fmt.Printf("엔트리     raw=%d (노브 %d×%d + 스텝 %d + 뮤트 %d + 드롭 %d)\n",
-		len(l.Entries), gestures, gestureLen, stepEdits, muteCount, dropCount)
+	fmt.Printf("엔트리     raw=%d (노브 %d×%d + 스텝 %d + 뮤트 %d + 드롭 %d + 코드 %d×%d + 모드 %d + 트랜스포트 %d + 키 %d)\n",
+		len(l.Entries), gestures, gestureLen, stepEdits, muteCount, dropCount,
+		chordCycles, engine.ChordBars, bassModes, transports, setKeys)
 	fmt.Printf("%-10s %6d자\n", "EncodeURL", len(raw))
 	fmt.Printf("%-10s %6d자  감량=%d (%s)\n", "예산2000", len(url), level, levelName(level))
 	if len(url) <= budgetChars {
@@ -132,6 +139,32 @@ func synthesize() *session.Log {
 	}
 	for i := 0; i < dropCount; i++ {
 		items = append(items, slot{uint32(totalBlocks * (i + 1) / (dropCount + 1)), engine.Cmd{Kind: engine.Drop}})
+	}
+	// §12.5 — 코드 트랙 8마디씩 3사이클(사이클마다 8마디 전부 한 번씩; 연속 블록이라
+	// 전부 같은 스텝에 들어가지만 마디가 달라 같은 스텝 감량 대상이 아니다).
+	for c := 0; c < chordCycles; c++ {
+		base := uint32(totalBlocks*(c+1)/(chordCycles+1) + 1 + rng.byteN(40))
+		for bar := 0; bar < engine.ChordBars; bar++ {
+			items = append(items, slot{base + uint32(bar), engine.Cmd{Kind: engine.SetChord,
+				A: uint8(bar), B: uint8(rng.byteN(int(engine.NumDegrees))),
+				C: uint8(rng.byteN(2)) * engine.ChordSeventh}})
+		}
+	}
+	// 베이스 모드 12회 — 무작위 파트·모드·방향.
+	for i := 0; i < bassModes; i++ {
+		items = append(items, slot{uint32(1 + rng.byteN(totalBlocks-2)), engine.Cmd{Kind: engine.BassMode,
+			A: uint8(rng.byteN(2)), B: uint8(rng.byteN(int(engine.NumModes))),
+			C: uint8(rng.byteN(int(engine.NumDirs)))}})
+	}
+	// 트랜스포트 4회 — 재생·정지 교대로 분산 배치.
+	for i := 0; i < transports; i++ {
+		items = append(items, slot{uint32(totalBlocks*(i+1)/(transports+1) + 1 + rng.byteN(40)),
+			engine.Cmd{Kind: engine.Transport, A: uint8((i + 1) % 2)}})
+	}
+	// 키 1회 — 세션 초반에 한 번.
+	for i := 0; i < setKeys; i++ {
+		items = append(items, slot{uint32(1 + rng.byteN(totalBlocks/10)), engine.Cmd{
+			Kind: engine.SetKey, A: uint8(rng.byteN(int(engine.NumKeys)))}})
 	}
 
 	sort.SliceStable(items, func(i, j int) bool { return items[i].block < items[j].block })

@@ -1,8 +1,10 @@
-// url.go — 로그 ↔ 공유 URL 직렬화. 계약 원본 docs/impl-plan-2026-09-05.md §5.
+// url.go — 로그 ↔ 공유 URL 직렬화. 계약 원본 docs/impl-plan-2026-09-05.md §5·§12.5.
 //
-// 형식: "v1." + base64url(패딩 없음). 페이로드 = 헤더(버전 u8, seed varint, 단어 길이
+// 형식: "v2." + base64url(패딩 없음). 페이로드 = 헤더(버전 u8, seed varint, 단어 길이
 // varint + UTF-8 바이트) + 엔트리 스트림(스텝 델타 varint + Kind u8 + Kind별 필드).
 // Author는 URL에 없다(디코드 시 전부 ReplayAuthor), 키프레임도 없다(URL은 처음부터 재생).
+// v1 문자열은 거절한다 — Phase 2에서 BassStep note가 절대음→도수로 바뀌어 v1 로그를
+// v2로 재생하면 다른 소리가 나기 때문이다(§12.5).
 //
 // 스텝 양자화: 각 엔트리의 블록을 스텝 인덱스로 바꾼다 — 리플레이가 스텝 경계에서
 // 적용하기 위해서다. 스텝 인덱스는 저장하지 않고 블록·템포 이력에서 유도한다
@@ -10,9 +12,10 @@
 // 만나면 이후 스텝 간격을 engine.BPMOf(양자화값) 공식으로 갱신한다(엔진과 같은 식).
 // 누적은 float64.
 //
-// 외부 입력(URL)은 읽으며 재정규화한다: 알 수 없는 Kind는 건너뛰고(필드 없음으로
-// 간주 — 프레이밍 유지), 잘린 스트림은 읽은 것까지 유효 + error, 버전 불일치는 거부,
-// u16 값은 4095 클램프, A/B 범위는 엔진 Apply가 정규하므로 그대로 둔다.
+// 외부 입력(URL)은 읽으며 재정규화한다: 알 수 없는 Kind(≥ NumCmdKinds)는 건너뛰고
+// (필드 없음으로 간주 — 프레이밍 유지), 잘린 스트림은 읽은 것까지 유효 + error,
+// v1 접두사·버전 불일치는 거부, u16 값은 4095 클램프, A/B/C 범위는 엔진 Apply가
+// 정규하므로 그대로 둔다.
 package session
 
 import (
@@ -27,8 +30,9 @@ import (
 )
 
 const (
-	urlPrefix  = "v1."
-	urlVersion = 1
+	urlPrefixV1 = "v1."
+	urlPrefix   = "v2."
+	urlVersion  = 2
 	// urlMaxStep — 디코드 방어 상한: 약 1600만 스텝(160 BPM 기준 약 6일).
 	// 악의적 거대 varint 델타로 시계 전진 루프를 돌리는 것을 끊는다.
 	urlMaxStep = 1 << 24
@@ -36,6 +40,8 @@ const (
 
 // EncodeURL — 로그를 공유 URL로. 같은 스텝 안에서 같은 파라미터의 SetParam 중간값은
 // 마지막 것만 남는다(스텝 양자화의 자연 결과 — 스텝 경계 적용에서는 마지막 값만 들린다).
+// 같은 규칙이 같은 스텝 안의 같은 마디 SetChord에도 적용된다(encodePayload 참조).
+// SetKey·BassMode·Transport는 감량하지 않는다(§12.5 — 새 Kind 예산 병목이 되지 않는다).
 func EncodeURL(l *Log) string {
 	return encodePayload(l, 0)
 }
@@ -72,8 +78,9 @@ func encodePayload(l *Log, level int) string {
 	payload = binary.AppendUvarint(payload, uint64(len(l.Word)))
 	payload = append(payload, l.Word...)
 
-	// 1패스: 스텝 인덱스 계산 + SetParam 감량 표시. 시계는 전 엔트리에 대해 전진한다
-	// (감량된 Tempo 엔트리도 지나가지만 setTempoQ는 "마지막 값 승리"라 결과가 같다).
+	// 1패스: 스텝 인덱스 계산 + SetParam 감량 표시 + SetChord 같은 스텝 감량 표시.
+	// 시계는 전 엔트리에 대해 전진한다(감량된 Tempo 엔트리도 지나가지만 setTempoQ는
+	// "마지막 값 승리"라 결과가 같다).
 	clk := newStepClock()
 	steps := make([]uint64, len(l.Entries))
 	superseded := make([]bool, len(l.Entries))
@@ -82,6 +89,11 @@ func encodePayload(l *Log, level int) string {
 		group uint64
 	}
 	keeper := make(map[pgroup]int, len(l.Entries))
+	type cgroup struct {
+		bar  uint8
+		step uint64
+	}
+	chordKeeper := make(map[cgroup]int)
 	for i := range l.Entries {
 		e := &l.Entries[i]
 		steps[i] = clk.stepOf(e.Block)
@@ -92,6 +104,16 @@ func encodePayload(l *Log, level int) string {
 				superseded[j] = true
 			}
 			keeper[k] = i
+		}
+		// SetChord — 같은 스텝 안의 같은 마디(A%%ChordBars, 엔진 Apply와 같은 해석)는 마지막만.
+		// 스텝 양자화의 자연 결과와 같은 규칙(같은 경계에 순서대로 Apply되면 마지막이 들린다).
+		// 감량 사다리(level)와 무관하게 항상 스텝 단위다 — 새 Kind는 사다리 감량 대상이 아니다.
+		if e.Cmd.Kind == engine.SetChord {
+			k := cgroup{e.Cmd.A % engine.ChordBars, steps[i]}
+			if j, ok := chordKeeper[k]; ok {
+				superseded[j] = true
+			}
+			chordKeeper[k] = i
 		}
 		if e.Cmd.Kind == engine.SetParam && e.Cmd.A == uint8(engine.Tempo) {
 			clk.setTempoQ(quantizeV(e.Cmd.V)) // 시계도 양자화된 값으로(디코드와 동일 경로)
@@ -136,8 +158,10 @@ func appendCmd(b []byte, c *engine.Cmd) []byte {
 		b = append(b, c.A, c.B)
 	case engine.Mute:
 		b = append(b, c.A, c.B)
-	case engine.Trigger:
+	case engine.Trigger, engine.SetKey, engine.Transport:
 		b = append(b, c.A)
+	case engine.SetChord, engine.BassMode:
+		b = append(b, c.A, c.B, c.C)
 	case engine.Drop, engine.ResetPos:
 	}
 	return b
@@ -206,6 +230,11 @@ func (c *stepClock) blockOf(step uint64) float64 {
 // DecodeURL — 공유 URL을 로그로. 헤더 실패(접두사·base64·버전·varint 잘림)는 (nil, err).
 // 엔트리 스트림이 잘렸으면 읽은 것까지 채운 로그와 error를 함께 돌려준다(부분 결과).
 func DecodeURL(s string) (*Log, error) {
+	if strings.HasPrefix(s, urlPrefixV1) {
+		// v1은 지원하지 않는 버전이다 — Phase 2에서 BassStep note가 절대음→도수로
+		// 바뀌어 v1 로그를 재생하면 다른 소리가 난다(§12.5).
+		return nil, errors.New("session: v1 URL은 지원하지 않는 버전이다(note 도수 의미 변경)")
+	}
 	if !strings.HasPrefix(s, urlPrefix) {
 		return nil, fmt.Errorf("session: URL 접두사 불일치(기대 %q)", urlPrefix)
 	}
@@ -308,18 +337,24 @@ func readCmd(raw []byte, pos int, kind byte) (c engine.Cmd, qv uint16, npos int,
 		}
 		c.A, c.B = raw[pos], raw[pos+1]
 		return c, 0, pos + 2, true
-	case engine.Trigger:
+	case engine.Trigger, engine.SetKey, engine.Transport:
 		if pos+1 > len(raw) {
 			return c, 0, -1, false
 		}
 		c.A = raw[pos]
 		return c, 0, pos + 1, true
+	case engine.SetChord, engine.BassMode:
+		if pos+3 > len(raw) {
+			return c, 0, -1, false
+		}
+		c.A, c.B, c.C = raw[pos], raw[pos+1], raw[pos+2]
+		return c, 0, pos + 3, true
 	case engine.Drop, engine.ResetPos:
 		return c, 0, pos, true
 	default:
-		// 알 수 없는 Kind: 필드 길이를 알 수 없으므로 0바이트로 간주해 건너뛴다.
-		// 이 규칙 때문에 미래 버전이 필드 있는 새 Kind를 추가하려면 길이 바이트가
-		// 필요하다(현재 계약에는 없는 Kind다).
+		// 알 수 없는 Kind(≥ NumCmdKinds — 위 switch가 계약 내 12종 전부를 커버한다):
+		// 필드 길이를 알 수 없으므로 0바이트로 간주해 건너뛴다. 이 규칙 때문에 미래
+		// 버전이 필드 있는 새 Kind를 추가하려면 길이 바이트가 필요하다.
 		return c, 0, pos, false
 	}
 }

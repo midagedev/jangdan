@@ -7,7 +7,7 @@
 // | AddKeyframe — StateSize 미만 무시, 블록 단조 | TestAddKeyframeGuards |
 // | Since — block 이하 마지막 키프레임 + 그 이후 엔트리 | TestSinceBoundaries |
 // | SeedFromWord: "acid"=="ACID "=="a c i d", ≠"acud", "노동요" 고정값, 빈→0x9E3779B9, 0→1 | TestSeedFromWord, TestFNV1a32Vectors |
-// | URL: v1.+base64url, 헤더(버전·seed·단어), 엔트리 스트림 | TestEncodeDecodeRoundTrip |
+// | URL: v2.+base64url, 헤더(버전·seed·단어), 엔트리 스트림 | TestEncodeDecodeRoundTrip |
 // | Author 미기입(디코드 시 ReplayAuthor), 키프레임 미기입 | TestEncodeDecodeRoundTrip |
 // | 스텝 양자화 — 템포 변경 추적(engine.BPMOf 공식, float64 누적) | TestStepQuantizationFollowsTempo |
 // | 같은 스텝 같은 파라미터 SetParam — 마지막 값만 | TestSetParamSameStepReduction |
@@ -15,6 +15,7 @@
 // | 왕복 고정점 Encode→Decode→Encode 바이트 동일(감량 0..3단계) | TestURLFixedPoint |
 // | 디코드 재정규화: 잘림→부분+err, 알 수 없는 Kind→건너뜀 | TestDecodeTruncatedStream, TestDecodeUnknownKindSkips |
 // | 버전 불일치·접두사·base64·거대 varint 거부 | TestDecodeRejectsBadSchema, TestDecodeHostileVarint |
+// | URL v2 — 새 Kind 4종·v1 거부·같은 스텝 같은 마디 SetChord 감량(§12.5) | url_v2_test.go 표 참조 |
 // | Replay — 두 엔진 같은 로그 → 샘플 바이트 동일, 수동 루프와 동일 | TestReplayDeterministic, TestReplayMatchesManual |
 // | ReplaySteps — 스텝 경계 블록 적용(Step()/Bar() 감시) | TestReplayStepsAppliesAtStepBoundaries |
 // | jdsess -print URL → DecodeURL 엔트리 수 일치 | TestJdsessPrintURLDecodes |
@@ -177,7 +178,7 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 	l.AddKeyframe(10, full) // URL에 없어야 한다
 
 	url := EncodeURL(l)
-	if !strings.HasPrefix(url, "v1.") {
+	if !strings.HasPrefix(url, "v2.") {
 		t.Fatalf("접두사: %q", url[:8])
 	}
 	d, err := DecodeURL(url)
@@ -354,11 +355,11 @@ func TestDecodeTruncatedStream(t *testing.T) {
 	for _, b := range []uint32{0, 200, 400} {
 		l.Append(b, Human, engine.Cmd{Kind: engine.Mute, A: 1, B: 1})
 	}
-	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(EncodeURL(l), "v1."))
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(EncodeURL(l), "v2."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	cut := "v1." + base64.RawURLEncoding.EncodeToString(raw[:len(raw)-1]) // 마지막 바이트만 잘림
+	cut := "v2." + base64.RawURLEncoding.EncodeToString(raw[:len(raw)-1]) // 마지막 바이트만 잘림
 	d, err := DecodeURL(cut)
 	if err == nil {
 		t.Fatal("잘린 스트림인데 error 없음")
@@ -380,13 +381,13 @@ func entryCount(l *Log) int {
 
 func TestDecodeUnknownKindSkips(t *testing.T) {
 	// 수제 페이로드: 헤더 + 알 수 없는 Kind(0x77) 1개 + 정상 BassStep 1개(델타 0).
-	payload := []byte{1}               // 버전
+	payload := []byte{2}               // 버전
 	payload = append(payload, 7)       // seed varint
 	payload = append(payload, 0)       // 단어 길이 0
 	payload = append(payload, 0, 0x77) // step 델타 0 + 알 수 없는 Kind
 	payload = append(payload, 0, 1)    // 델타 0 + Kind BassStep
 	payload = append(payload, 1, 7, 24, engine.StepGate)
-	d, err := DecodeURL("v1." + base64.RawURLEncoding.EncodeToString(payload))
+	d, err := DecodeURL("v2." + base64.RawURLEncoding.EncodeToString(payload))
 	if err != nil {
 		t.Fatalf("알 수 없는 Kind 건너뛰기 실패: %v", err)
 	}
@@ -397,33 +398,33 @@ func TestDecodeUnknownKindSkips(t *testing.T) {
 
 func TestDecodeRejectsBadSchema(t *testing.T) {
 	l := sampleLog()
-	good, _ := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(EncodeURL(l), "v1."))
+	good, _ := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(EncodeURL(l), "v2."))
 
-	if d, err := DecodeURL("v2." + base64.RawURLEncoding.EncodeToString(good)); err == nil || d != nil {
-		t.Errorf("v2 접두사 거부 안 됨: %v", err)
+	if d, err := DecodeURL("v3." + base64.RawURLEncoding.EncodeToString(good)); err == nil || d != nil {
+		t.Errorf("v3 접두사 거부 안 됨: %v", err)
 	}
 	bad := append([]byte(nil), good...)
-	bad[0] = 2 // 버전 바이트 불일치
-	if d, err := DecodeURL("v1." + base64.RawURLEncoding.EncodeToString(bad)); err == nil || d != nil {
-		t.Errorf("버전 2 페이로드 거부 안 됨: %v", err)
+	bad[0] = 1 // 버전 바이트 불일치(v1 페이로드)
+	if d, err := DecodeURL("v2." + base64.RawURLEncoding.EncodeToString(bad)); err == nil || d != nil {
+		t.Errorf("버전 1 페이로드 거부 안 됨: %v", err)
 	}
-	if d, err := DecodeURL("v1.!!!"); err == nil || d != nil {
+	if d, err := DecodeURL("v2.!!!"); err == nil || d != nil {
 		t.Error("잘못된 base64 거부 안 됨")
 	}
 	if d, err := DecodeURL(""); err == nil || d != nil {
 		t.Error("빈 입력 거부 안 됨")
 	}
-	if d, err := DecodeURL("v1."); err == nil || d != nil {
+	if d, err := DecodeURL("v2."); err == nil || d != nil {
 		t.Error("빈 페이로드 거부 안 됨")
 	}
 }
 
 func TestDecodeHostileVarint(t *testing.T) {
 	// 정당하지만 거대한 step 델타(2^35) — 시계 전진 루프를 끊고 오류로 거부해야 한다.
-	payload := []byte{1, 7, 0}
+	payload := []byte{2, 7, 0}
 	payload = append(payload, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01) // 델타 2^35
 	payload = append(payload, 1, 1, 1)                            // Kind + 필드
-	d, err := DecodeURL("v1." + base64.RawURLEncoding.EncodeToString(payload))
+	d, err := DecodeURL("v2." + base64.RawURLEncoding.EncodeToString(payload))
 	if err == nil {
 		t.Fatal("거대 델타 거부 안 됨")
 	}
@@ -551,7 +552,8 @@ func TestJdsessPrintURLDecodes(t *testing.T) {
 	if _, err := fmt.Sscanf(strings.TrimSpace(lines[1]), "entries=%d raw=%d", &enc, &raw); err != nil {
 		t.Fatalf("entries 라인 파싱: %v (%q)", err, lines[1])
 	}
-	if want := 200*20 + 100 + 20 + 3; raw != want {
+	// §12.5 추가분 포함: 노브 200×20 + 스텝 100 + 뮤트 20 + 드롭 3 + 코드 8×3사이클 + 모드 12 + 트랜스포트 4 + 키 1.
+	if want := 200*20 + 100 + 20 + 3 + 3*engine.ChordBars + 12 + 4 + 1; raw != want {
 		t.Errorf("합성 엔트리 raw=%d, want %d", raw, want)
 	}
 	l, err := DecodeURL(url)
