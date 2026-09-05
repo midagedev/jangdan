@@ -3,6 +3,9 @@
 #   bash tools/reports-pull.sh [outdir=spike/worklet/results/remote]
 # 필요: ~/.zshrc 의 JANGDAN_REPORTS_URL(Worker 주소)와 JANGDAN_ADMIN_TOKEN(wrangler secret put ADMIN_TOKEN 과 같은 값).
 set -euo pipefail
+# 도구 셸이 ~/.zshrc를 다시 읽지 않는 환경(에이전트 하네스)을 위한 폴백: 미설정이면 zshrc에서 읽는다.
+: "${JANGDAN_REPORTS_URL:=$(grep -m1 '^export JANGDAN_REPORTS_URL=' ~/.zshrc 2>/dev/null | cut -d'"' -f2)}"
+: "${JANGDAN_ADMIN_TOKEN:=$(grep -m1 '^export JANGDAN_ADMIN_TOKEN=' ~/.zshrc 2>/dev/null | cut -d'"' -f2)}"
 OUT=${1:-spike/worklet/results/remote}; mkdir -p "$OUT"
 URL=${JANGDAN_REPORTS_URL:?set JANGDAN_REPORTS_URL in ~/.zshrc}; TOKEN=${JANGDAN_ADMIN_TOKEN:?set JANGDAN_ADMIN_TOKEN in ~/.zshrc}
 LIST=$(curl -sS "$URL/reports?token=$TOKEN")

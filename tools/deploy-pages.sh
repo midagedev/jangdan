@@ -6,6 +6,9 @@
 # raw app.wasm(10MB)도 폴백용으로 함께 올린다. 나중에 Actions 워크플로로 전환 예정.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# 도구 셸이 ~/.zshrc를 다시 읽지 않는 환경(에이전트 하네스)을 위한 폴백: 미설정이면 zshrc에서 읽는다.
+: "${JANGDAN_REPORTS_URL:=$(grep -m1 '^export JANGDAN_REPORTS_URL=' ~/.zshrc 2>/dev/null | cut -d'"' -f2)}"
+: "${JANGDAN_ADMIN_TOKEN:=$(grep -m1 '^export JANGDAN_ADMIN_TOKEN=' ~/.zshrc 2>/dev/null | cut -d'"' -f2)}"
 REPO=midagedev/jangdan; URL="https://github.com/$REPO.git"
 bash spike/worklet/build.sh >/dev/null && bash app/build.sh | tail -1
 DIST=$(mktemp -d)/dist; mkdir -p "$DIST/worklet" "$DIST/app"
