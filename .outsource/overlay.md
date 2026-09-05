@@ -28,5 +28,5 @@
 - Ebitengine v2.9: `ebiten.SetTPS(ebiten.SyncWithFPS)` 필수(120Hz에서 Update 스킵). 프레임당 힙 할당 ≤ 2KB —
   `DrawImageOptions`는 재사용, 프레임마다 `&ebiten.DrawImageOptions{}` 금지.
 - `syscall/js`는 `*_js.go`(빌드 태그 `js && wasm`)에만. `go vet ./app/...`은 데스크톱 타깃으로 통과해야 한다.
-- 좌표의 단일 소유자는 레이아웃 JSON(`app/assets/device/layout.json`, `app/assets/room/layout.json`).
+- 좌표의 단일 소유자는 레이아웃 JSON(app/assets 아래 device 와 room 각각의 layout.json — 웨이브 2에서 생성).
   Go 코드에 픽셀 좌표 상수를 새로 두지 않는다.

@@ -2,7 +2,10 @@ module github.com/midagedev/revirth
 
 go 1.26
 
-require github.com/hajimehoshi/ebiten/v2 v2.9.11
+require (
+	github.com/hajimehoshi/ebiten/v2 v2.9.11
+	golang.org/x/image v0.43.0
+)
 
 require (
 	github.com/ebitengine/gomobile v0.0.0-20250923094054-ea854a63cce1 // indirect

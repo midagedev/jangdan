@@ -1,0 +1,18 @@
+{
+ "_comment": "플레이스홀더 — opus 비전 라운드가 plate-night.png를 보고 영역을 채운다. 좌표는 720×1280 플레이트 픽셀.",
+ "size": [720, 1280],
+ "plates": {"night": "plate-night.png", "evening": "plate-night.png", "afternoon": "plate-night.png"},
+ "lamp": {"bulb": [200, 700], "radius": 220, "cone": [80, 720, 320, 200]},
+ "skylight": [120, 60, 480, 340],
+ "windows": [],
+ "mug": {"rect": [420, 820, 40, 40], "steam": [440, 815]},
+ "cat": {"rect": [480, 1040, 160, 120], "poses": [], "anchor": [560, 1160]},
+ "character": {"rect": [260, 600, 220, 340], "poses": [], "anchor": [370, 940]},
+ "device": [250, 860, 260, 90],
+ "device_leds": [],
+ "scope": [340, 870, 80, 30],
+ "radiator": [40, 900, 120, 200],
+ "records": [],
+ "seed_text": [40, 1200, 640, 50],
+ "palette": {"lamp_warm": "#f2b866", "ink": "#1c1a24", "rain": "#9fb3c8", "window_lit": "#e8c27a"}
+}
