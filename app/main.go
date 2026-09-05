@@ -16,6 +16,9 @@ import (
 	"github.com/midagedev/revirth/app/core"
 	"github.com/midagedev/revirth/app/view/device"
 	"github.com/midagedev/revirth/app/view/room"
+	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/revirth/resident"
+	"github.com/midagedev/revirth/session"
 )
 
 type mode uint8
@@ -42,6 +45,83 @@ type game struct {
 	touchIDs   []ebiten.TouchID
 	pointers   []core.Pointer
 	audioOn    bool
+
+	in integ
+}
+
+// integ — 레지던트·세션 배선 상태(계약: docs/impl-plan-2026-09-05.md §6·§7).
+type integ struct {
+	res       *resident.Resident
+	log       *session.Log // 정본 로그는 호스트(JS)가 갖고, Go 쪽 미러는 URL 인코딩·리플레이 후보 계산용
+	started   bool
+	startNow  float64 // 오디오 시작 시각(ctx.Now)
+	lastBar   uint32
+	firstKnob bool
+	wallDrop  int // 마지막으로 벽시계 드롭을 보낸 시(hour), -1 = 없음
+}
+
+func newInteg(word string) integ {
+	seed := session.SeedFromWord(word)
+	return integ{
+		res:      resident.New(seed, resident.DeepFocus, resident.Config{FocusMin: 25, RestMin: 5, DemoFocusMin: 5}),
+		log:      &session.Log{Seed: seed, Word: word},
+		wallDrop: -1,
+	}
+}
+
+// send — 엔진에 닿는 모든 Cmd는 이 한 곳을 지난다(브리지 전송 + Go 미러 로그).
+func (g *game) send(c engine.Cmd, a core.Author) {
+	g.ctx.Bridge.Cmd(c, a)
+	g.in.log.Append(uint32(g.ctx.Tick.Block)+2, session.Author(a), c)
+}
+
+// updateIntegration — Tick 갱신 직후. 사용자 손→잠금, 레지던트 틱→Cmd, 방 뷰 연출 입력, 벽시계 드롭.
+func (g *game) updateIntegration() {
+	t := g.ctx.Tick
+	if !t.Started {
+		return
+	}
+	if !g.in.started {
+		g.in.started = true
+		g.in.startNow = g.ctx.Now
+		g.in.lastBar = t.Bar
+	}
+	if id, ok := g.device.JustGrabbed(); ok {
+		g.in.res.Lock(id)
+		if !g.in.firstKnob {
+			g.in.firstKnob = true
+			g.ctx.Bridge.Telemetry("first_knob_ms", (g.ctx.Now-g.in.startNow)*1000)
+		}
+	}
+	if g.device.ResumeTapped() {
+		g.in.res.Resume()
+	}
+	if g.device.DropTapped() {
+		g.ctx.Bridge.Telemetry("drop", 1)
+	}
+	barStart := t.Flags&engine.FlagBar != 0 || t.Bar != g.in.lastBar
+	g.in.lastBar = t.Bar
+	for _, c := range g.in.res.Tick(resident.Input{Bar: t.Bar, Step: t.Step, Now: g.ctx.Now - g.in.startNow, BarStart: barStart}) {
+		g.send(c, core.Resident)
+	}
+	g.ctx.ResidentHand, g.ctx.ResidentHandOn = g.in.res.Hand()
+	g.ctx.Energy = g.in.res.Energy()
+	g.ctx.Phase = uint8(g.in.res.Phase())
+	ph, remain, _ := g.in.res.Pomodoro()
+	g.ctx.PomodoroRest = ph == resident.Rest
+	g.ctx.PomodoroRemainSec = remain
+	g.ctx.ManualLocked = false
+	for i := 0; i < int(engine.NumParams); i++ {
+		if g.in.res.Locked(engine.ParamID(i)) {
+			g.ctx.ManualLocked = true
+			break
+		}
+	}
+	// 벽시계 드롭: 매시 정각(3초 창) 1회. 서버 없이 접속 중인 모든 레지던트가 함께 떨어진다.
+	if h, m, s := g.ctx.Bridge.WallClock(); m == 0 && s < 3 && g.in.wallDrop != h {
+		g.in.wallDrop = h
+		g.send(engine.Cmd{Kind: engine.Drop}, core.System)
+	}
 }
 
 func newGame() (*game, error) {
@@ -49,6 +129,7 @@ func newGame() (*game, error) {
 	g.last = g.start
 	g.ctx.Bridge = core.NewBridge()
 	g.ctx.Font = core.NewFontSet(assets.FontAtlasPNG, assets.FontAtlasJSON)
+	g.in = newInteg(g.ctx.Bridge.SeedWord())
 	var err error
 	if g.room, err = room.New(&g.ctx); err != nil {
 		return nil, err
@@ -111,6 +192,7 @@ func (g *game) Update() error {
 		}
 	}
 	g.ctx.Tick = g.ctx.Bridge.Tick()
+	g.updateIntegration()
 
 	switch g.mode {
 	case modeRoom:
