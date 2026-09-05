@@ -191,7 +191,7 @@ func New(ctx *core.Ctx) (*View, error) {
 	if err != nil {
 		return nil, err
 	}
-	img, _, err := image.Decode(bytes.NewReader(assets.DevicePanelPNG))
+	img, _, err := image.Decode(bytes.NewReader(mustAsset("device/panel.png")))
 	if err != nil {
 		return nil, fmt.Errorf("device: 패널 디코드: %w", err)
 	}
@@ -203,7 +203,7 @@ func New(ctx *core.Ctx) (*View, error) {
 	}
 	clss := make([]cls, 0, len(l.Sprites))
 	for name, sp := range l.Sprites {
-		data, err := assets.DeviceSprites.ReadFile("device/sprites/" + name)
+		data, err := assets.Read("device/sprites/" + name)
 		if err != nil {
 			return nil, fmt.Errorf("device: 스프라이트 %s: %w", name, err)
 		}
@@ -608,3 +608,12 @@ func (v *View) ResumeTapped() bool { return v.resume }
 
 // DropTapped — play 자리(라벨 DROP) 탭. Drop Cmd는 뷰가 직접 보낸다.
 func (v *View) DropTapped() bool { return v.drop }
+
+// mustAsset — 자산 바이트(없으면 빈 슬라이스 → image.Decode가 오류를 내고 New가 그 오류를 돌려준다).
+func mustAsset(name string) []byte {
+	b, err := assets.Read(name)
+	if err != nil {
+		return nil
+	}
+	return b
+}

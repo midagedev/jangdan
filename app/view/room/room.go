@@ -367,7 +367,7 @@ func New(ctx *core.Ctx) (*View, error) {
 	for i, nm := range names {
 		img, ok := decoded[nm]
 		if !ok {
-			b, err := assets.RoomFiles.ReadFile("room/" + nm)
+			b, err := assets.Read("room/" + nm)
 			if err != nil {
 				return nil, fmt.Errorf("room: plate %s: %w", nm, err)
 			}
@@ -441,7 +441,7 @@ func (v *View) loadPoses(names []string) []*ebiten.Image {
 	}
 	out := make([]*ebiten.Image, len(names))
 	for i, nm := range names {
-		b, err := assets.RoomFiles.ReadFile("room/" + nm)
+		b, err := assets.Read("room/" + nm)
 		if err != nil {
 			continue
 		}

@@ -15,6 +15,7 @@ DIST=$(mktemp -d)/dist; mkdir -p "$DIST/worklet" "$DIST/app"
 cp spike/worklet/public/{index.html,main.js,processor.js,engine.wasm} "$DIST/worklet/"
 REPORT_URL=${JANGDAN_REPORTS_URL:-}; for d in worklet app; do printf "window.JD_REPORT_URL = %s;\n" "$( [[ -n "$REPORT_URL" ]] && printf "'%s/report'" "$REPORT_URL" || printf "''" )" > "$DIST/$d/report-config.js"; done
 cp app/web/{index.html,host.js,processor.js,wasm_exec.js,engine.wasm,still.png,app.wasm,app.wasm.gz} "$DIST/app/"
+cp -R app/web/assets "$DIST/app/assets"
 [[ -n "$REPORT_URL" ]] || echo "warn: JANGDAN_REPORTS_URL unset — Send report는 비활성으로 배포됨" >&2
 cat > "$DIST/index.html" <<HTML
 <!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

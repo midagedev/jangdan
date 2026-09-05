@@ -24,6 +24,14 @@
 
   // ==== 계측(스파이크 bridge.js 필드 유지 + 호스트 확장) ====
   const tPageStart = performance.now();
+
+  // ==== 자산 prefetch(큰 PNG는 wasm 밖) — 목록은 app/assets/assets.go의 Names와 같다 ====
+  // app.wasm 다운로드와 병렬로 받는다. Go는 assets.WaitReady()로 완료를 기다린 뒤 jd.asset(name)으로 읽는다.
+  const ASSET_NAMES = ['device/panel.png', 'device/sprites/knob-r25.png', 'device/sprites/knob-r32.png', 'device/sprites/knob-r42.png', 'room/plate-night.png'];
+  const assetBytes = new Map();
+  let assetsState = 0; // 0 진행 중, 1 전부 성공, -1 일부 실패(있는 것만 제공)
+  Promise.all(ASSET_NAMES.map((n) => fetch('assets/' + n).then((r) => { if (!r.ok) throw new Error(n + ' ' + r.status); return r.arrayBuffer(); }).then((buf) => assetBytes.set(n, new Uint8Array(buf))).catch((e) => { console.warn('jd host: 자산 실패', e); assetsState = -1; })))
+    .then(() => { if (assetsState === 0) assetsState = 1; stats.tAssetsReady = performance.now(); });
   const stats = {
     wasmBytes: 0,          // app.wasm 원본 바이트(measure.mjs가 주입)
     wasmGzipBytes: null,
@@ -461,6 +469,8 @@
   const wallOut = [0, 0, 0];
 
   window.jd = {
+    asset(name) { return assetBytes.get(name) || null; },
+    assetsReady() { return assetsState; },
     start,
     cmd,
     tick,

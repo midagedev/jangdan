@@ -244,6 +244,8 @@ func main() {
 	ebiten.SetWindowTitle("장단 / Jangdan")
 	// TPS를 FPS에 동기 — 120Hz 화면에서 기본 TPS 60이면 Update가 프레임을 건너뛴다(스파이크 실측).
 	ebiten.SetTPS(ebiten.SyncWithFPS)
+	// 큰 PNG는 wasm 밖에서 온다(assets 패키지 주석) — 호스트 prefetch 완료까지 대기(데스크톱은 즉시).
+	assets.WaitReady()
 	g, err := newGame()
 	if err != nil {
 		panic(err)

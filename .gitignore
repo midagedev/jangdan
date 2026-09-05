@@ -16,3 +16,4 @@ spike/worklet/public/engine.opt.wasm
 dist/
 cf/node_modules/
 cf/.wrangler/
+app/web/assets/
