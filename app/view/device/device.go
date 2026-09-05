@@ -1,18 +1,610 @@
-// Package device — 기기 뷰(스텁; T5 라운드가 교체). 계약: New(ctx) core.View.
+// Package device — 기기 뷰. fal.ai로 칠한 패널 한 장(app/assets/device/panel.png) 위에
+// 노브 스프라이트를 −135°..+135° 회전해 올리고, 라벨·숫자·표시창은 앱 폰트로 그린다
+// (diffusion은 글자를 망친다). 좌표의 단일 소유자는 레이아웃 JSON이다.
+//
+// 이 파일은 상태기계(입력 → Cmd)를 담고 그리기는 draw.go에 있다. Update만 Cmd를 보내며
+// Draw는 무송신. 프레임당 힙 할당은 문자열 캐시(값 변화 시에만 재구성)를 제외하면 0이다.
 package device
 
 import (
-	"github.com/hajimehoshi/ebiten/v2"
+	"bytes"
+	"fmt"
+	"image"
+	"image/color"
+	"math"
+	"sort"
+	"strconv"
+	"strings"
 
+	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/vector"
+	_ "image/png" // 패널·스프라이트 디코드
+
+	"github.com/midagedev/revirth/app/assets"
 	"github.com/midagedev/revirth/app/core"
+	"github.com/midagedev/revirth/engine"
 )
 
-type View struct{}
+// 수치 계약(스펙 origin). 픽셀 좌표는 여기에 없다 — 레이아웃 JSON이 소유한다.
+const (
+	hitKnobPad   = 6     // 노브 히트 여유(px, 중심 거리 r+6)
+	hitRectPad   = 4     // rect 컨트롤 히트 여유(px)
+	dragRange    = 200.0 // 노브 세로 드래그: 200px = Δ1.0
+	tapMoveMax   = 6.0   // 탭 판정 최대 이동(px)
+	tapDurMax    = 0.25  // 탭 판정 최대 눌림(초)
+	padHoldMute  = 0.5   // 패드 길게 누르기 뮤트 임계(초)
+	padLitDur    = 0.12  // 패드 탭 lit(초)
+	sweepSendMin = 0.05  // 스윕 중 SetParam 최소 송신 간격(초)
+	knobLitBoost = 1.12  // 잡힌 노브 밝기 배수
+	padMuteScale = 0.55  // 뮤트 패드 ColorScale(오버레이 알파 0.45로 환원)
+	dropPulseAmp = 0.35  // Build 중 DROP 버튼 펄스 진폭(+0..35%)
+	dropPulseHz  = 1.0   // 펄스 주파수
+	overlayLitA  = 0.18  // lit 반투명 흰 사각 알파
+	labelKnobDy  = 4     // 노브 라벨: cy + r + 4
+	plateInset   = 6     // 섹션 이름판 왼쪽 정렬 들여쓰기(px)
+)
 
-func New(ctx *core.Ctx) (*View, error) { return &View{}, nil }
+// 색 계약(스펙 hex 그대로).
+var (
+	colLabel  = color.NRGBA{0xE8, 0xE2, 0xD2, 191} // #E8E2D2 α0.75 — 라벨
+	colLCD    = color.NRGBA{0x7F, 0xE0, 0x8A, 255} // #7FE08A — 표시창·스코프
+	colLEDOn  = color.NRGBA{0xFF, 0x9A, 0x3C, 255} // 켜짐 α1.0
+	colLEDMid = color.NRGBA{0xFF, 0x9A, 0x3C, 115} // 중간 α0.45
+	colLEDOff = color.NRGBA{0x2A, 0x26, 0x22, 230} // 꺼짐 α0.9
+)
 
-func (v *View) Update(ctx *core.Ctx)                     {}
-func (v *View) Draw(screen *ebiten.Image, ctx *core.Ctx) {}
+// 라벨·표시 스케일.
+const (
+	labelKnobScale    = 0.5
+	labelBtnScale     = 0.45
+	labelPadScale     = 0.6
+	labelTitleScale   = 1.0
+	labelSectionScale = 0.5
+	dispBassScale     = 0.5
+	dispBottomScale   = 0.6
+)
 
-// BackTapped — 이 프레임에 이름판(타이틀 plate)이 탭됐는가(main.go가 방 뷰로 복귀).
-func (v *View) BackTapped() bool { return false }
+// 섹션 인덱스.
+const (
+	secBassA = 0
+	secBassB = 1
+	secDrums = 2
+	secFx    = 3
+)
+
+const numBassSecBtns = 10 // 베이스라인 섹션 버튼(saw..patD) 수
+
+// 표시창 문자열의 ASCII 구분자. 스펙 문구의 "·"(U+00B7)는 폰트 아틀라스가 ASCII
+// 32..126이라 '?'로 렌더되므로 대체했다 — 스펙↔폰트 계약 충돌, 보고서 참조.
+const asciiSep = " - "
+
+var phaseNames = [4]string{"INTRO", "BUILD", "DROP", "BREAK"}
+
+// ptrKind — 포인터가 잡은 컨트롤 종류.
+type ptrKind uint8
+
+const (
+	pkNone ptrKind = iota
+	pkKnob
+	pkPad
+)
+
+// ptrState — 포인터 ID별 캡처. 잡힌 노브는 이동 중 다른 컨트롤로 넘어가지 않는다.
+type ptrState struct {
+	id        int
+	kind      ptrKind
+	idx       int
+	x0, y0    float64 // 누른 지점(탭 판정 이동 거리의 기준)
+	t0        float64 // 누른 시각
+	grabVal   float32 // 노브 잡은 시점의 값
+	longFired bool    // 패드 길게 누르기 이미 발동
+	seen      bool
+}
+
+// bassDisp — 베이스라인 표시창 캐시. 문자열은 값 변화 시에만 재구성한다.
+type bassDisp struct {
+	knob  int // 그 섹션에서 마지막으로 만진 노브, -1 = 없음
+	val99 int32
+	text  string
+	dirty bool
+}
+
+// bottomDisp — 하단 표시창 캐시(BPM·BAR·페이즈).
+type bottomDisp struct {
+	bpm, bar int32
+	phase    uint8
+	text     string
+	dirty    bool
+}
+
+// View — 기기 뷰. New(이미지 있는 제품 경로)과 newView(레이아웃만 — 테스트)로 만든다.
+type View struct {
+	layout *core.DeviceLayout
+
+	knobs   []knob
+	buttons []button
+	pads    []padCtl
+	leds    []core.LED
+
+	secLEDs [2][numBassSecBtns]int // 섹션 버튼 순서(왼→오: saw..patD)의 LED 인덱스, -1 없음
+	fxLEDs  [engine.Steps]int
+	fxPlay  int // play(DROP) 버튼 인덱스
+	fxRec   int // rec(RESUME) 버튼 인덱스
+
+	titlePlate    core.Rect
+	hasTitle      bool
+	bassPlates    [2]core.Rect
+	hasBassPlate  [2]bool
+	sectionPlates [2]core.Rect // drums·fx 이름판(라벨용)
+	hasSection    [2]bool
+
+	dispRects [2]core.Rect
+	hasDisp   [2]bool
+	scopeRect core.Rect
+	botRect   core.Rect
+
+	selPart engine.Part // 16스텝 편집 대상(기본 BassA)
+	mode    editMode
+
+	ptrs   [8]ptrState
+	nptrs  int
+	disp   [2]bassDisp
+	bottom bottomDisp
+
+	// 재구성 카운터 — 표시창 캐시 계약의 테스트 근거.
+	rebuilds int
+
+	// 한 프레임 유효 플래그
+	back, drop, resume bool
+	grabID             engine.ParamID
+	grabOK             bool
+
+	// 드로잉 자산 — newView(테스트)에서는 nil. 디코드는 New에서만.
+	panel      *ebiten.Image
+	spriteImg  []*ebiten.Image // 반지름 클래스 오름차순
+	spriteCls  []float64
+	ledImg     [3]*ebiten.Image // on/mid/off
+	ledR       float64
+	white1     *ebiten.Image
+	black1     *ebiten.Image
+	dispImg    [3]*ebiten.Image // bassA·bassB·하단
+	labelLayer *ebiten.Image
+	layersOK   bool
+
+	op         ebiten.DrawImageOptions
+	wave       vector.Path
+	strokeOpts vector.StrokeOptions
+	drawOpts   vector.DrawPathOptions
+	scopeBytes [4 * scopeSamples]byte
+	scratch    [40]byte
+}
+
+const scopeSamples = 256
+
+// New — 제품 경로: 임베디드 자산에서 레이아웃·패널·노브 스프라이트를 읽는다.
+func New(ctx *core.Ctx) (*View, error) {
+	l, err := core.LoadDeviceLayout(assets.DeviceLayoutJSON)
+	if err != nil {
+		return nil, fmt.Errorf("device: 레이아웃 파싱: %w", err)
+	}
+	v, err := newView(l)
+	if err != nil {
+		return nil, err
+	}
+	img, _, err := image.Decode(bytes.NewReader(assets.DevicePanelPNG))
+	if err != nil {
+		return nil, fmt.Errorf("device: 패널 디코드: %w", err)
+	}
+	v.panel = ebiten.NewImageFromImage(img)
+
+	type cls struct {
+		r   float64
+		img image.Image
+	}
+	clss := make([]cls, 0, len(l.Sprites))
+	for name, sp := range l.Sprites {
+		data, err := assets.DeviceSprites.ReadFile("device/sprites/" + name)
+		if err != nil {
+			return nil, fmt.Errorf("device: 스프라이트 %s: %w", name, err)
+		}
+		im, _, err := image.Decode(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("device: 스프라이트 %s 디코드: %w", name, err)
+		}
+		clss = append(clss, cls{r: float64(sp.R), img: im})
+	}
+	sort.Slice(clss, func(i, j int) bool { return clss[i].r < clss[j].r })
+	for _, c := range clss {
+		v.spriteCls = append(v.spriteCls, c.r)
+		v.spriteImg = append(v.spriteImg, ebiten.NewImageFromImage(c.img))
+	}
+
+	// LED 스프라이트: 반지름은 레이아웃의 최대 LED r 하나로 통일하고 그릴 때 축소.
+	maxR := 0.0
+	for _, led := range l.LEDs {
+		if led.R > maxR {
+			maxR = led.R
+		}
+	}
+	if maxR <= 0 {
+		maxR = 6
+	}
+	v.ledR = maxR
+	v.ledImg[0] = ebiten.NewImageFromImage(ledCircle(maxR, colLEDOn))
+	v.ledImg[1] = ebiten.NewImageFromImage(ledCircle(maxR, colLEDMid))
+	v.ledImg[2] = ebiten.NewImageFromImage(ledCircle(maxR, colLEDOff))
+	v.white1 = ebiten.NewImageFromImage(solid1x1(color.NRGBA{0xFF, 0xFF, 0xFF, 0xFF}))
+	v.black1 = ebiten.NewImageFromImage(solid1x1(color.NRGBA{0, 0, 0, 0xFF}))
+	v.initStrokeOpts()
+	return v, nil
+}
+
+// newView — 레이아웃만 파싱해 컨트롤 인덱스를 구축한다(이미지 없음 — 유닛 테스트 경로).
+func newView(l *core.DeviceLayout) (*View, error) {
+	v := &View{layout: l, selPart: engine.BassA, fxPlay: -1, fxRec: -1}
+	v.disp[0].knob, v.disp[1].knob = -1, -1
+	for s := 0; s < 2; s++ {
+		for j := range v.secLEDs[s] {
+			v.secLEDs[s][j] = -1
+		}
+	}
+	for i := range v.fxLEDs {
+		v.fxLEDs[i] = -1
+	}
+
+	secOf := map[string]uint8{"basslineA": secBassA, "basslineB": secBassB, "drums": secDrums, "fx": secFx}
+	for _, k := range l.Knobs {
+		id, ok := core.KnobParam(k.Section, k.Name)
+		if !ok {
+			return nil, fmt.Errorf("device: 노브 %q/%q의 파라미터 매핑 없음", k.Section, k.Name)
+		}
+		sec, ok := secOf[k.Section]
+		if !ok {
+			return nil, fmt.Errorf("device: 노브 %q의 알 수 없는 섹션 %q", k.Name, k.Section)
+		}
+		v.knobs = append(v.knobs, knob{name: k.Name, sec: sec, cx: k.CX, cy: k.CY, r: k.R, id: id})
+	}
+	for _, b := range l.Buttons {
+		sec, ok := secOf[b.Section]
+		if !ok {
+			return nil, fmt.Errorf("device: 버튼 %q의 알 수 없는 섹션 %q", b.Name, b.Section)
+		}
+		bt := button{name: b.Name, sec: sec, rect: b.Rect}
+		switch b.Name {
+		case "saw":
+			bt.kind = bkWaveSaw
+		case "sqr":
+			bt.kind = bkWaveSqr
+		case "slide":
+			bt.kind = bkModeSlide
+		case "acc":
+			bt.kind = bkModeAcc
+		case "oct-":
+			bt.kind = bkOctDown
+		case "oct+":
+			bt.kind = bkOctUp
+		case "patA", "patB", "patC", "patD":
+			bt.kind, bt.arg = bkPat, int(b.Name[3]-'A')
+		case "play":
+			bt.kind = bkPlay
+		case "rec":
+			bt.kind = bkRec
+		default:
+			if n, err := strconv.Atoi(strings.TrimPrefix(b.Name, "step")); err == nil && n >= 1 && n <= engine.Steps {
+				bt.kind, bt.arg = bkStep, n-1
+			} else {
+				return nil, fmt.Errorf("device: 알 수 없는 버튼 %q/%q", b.Section, b.Name)
+			}
+		}
+		bt.label = buttonLabel(bt.name, bt.kind, bt.arg)
+		v.buttons = append(v.buttons, bt)
+	}
+	for i := range v.buttons {
+		switch v.buttons[i].kind {
+		case bkPlay:
+			v.fxPlay = i
+		case bkRec:
+			v.fxRec = i
+		}
+	}
+	for _, p := range l.Pads {
+		part, ok := core.PadPart(p.Name)
+		if !ok {
+			return nil, fmt.Errorf("device: 패드 %q의 파트 매핑 없음", p.Name)
+		}
+		v.pads = append(v.pads, padCtl{name: p.Name, part: part, rect: p.Rect})
+	}
+	v.leds = l.LEDs
+	for _, pl := range l.Plates {
+		switch pl.For {
+		case "title":
+			v.titlePlate, v.hasTitle = pl.Rect, true
+		case "basslineA":
+			v.bassPlates[0], v.hasBassPlate[0] = pl.Rect, true
+		case "basslineB":
+			v.bassPlates[1], v.hasBassPlate[1] = pl.Rect, true
+		case "drums":
+			v.sectionPlates[0], v.hasSection[0] = pl.Rect, true
+		case "fx":
+			v.sectionPlates[1], v.hasSection[1] = pl.Rect, true
+		}
+	}
+	for _, d := range l.Displays {
+		switch d.For {
+		case "basslineA":
+			v.dispRects[0], v.hasDisp[0] = d.Rect, true
+		case "basslineB":
+			v.dispRects[1], v.hasDisp[1] = d.Rect, true
+		}
+	}
+	v.scopeRect = l.Scope.Rect
+	v.botRect = l.Display.Rect
+	if err := v.pairLEDs(); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// pairLEDs — LED를 cy 밴드(3개: 베이스라인 A·B, fx 스텝)로 묶고 같은 밴드 안에서
+// x 순서로 섹션 버튼(왼→오)·스텝 버튼(1..16)과 짝짓는다. 좌표 소유권은 JSON에 있다.
+func (v *View) pairLEDs() error {
+	type band struct {
+		cy  float64
+		ids []int
+	}
+	var bands []band
+	for i, led := range v.leds {
+		found := false
+		for bi := range bands {
+			if math.Abs(bands[bi].cy-led.CY) <= 1 {
+				bands[bi].ids = append(bands[bi].ids, i)
+				found = true
+				break
+			}
+		}
+		if !found {
+			bands = append(bands, band{cy: led.CY, ids: []int{i}})
+		}
+	}
+	sort.Slice(bands, func(i, j int) bool { return bands[i].cy < bands[j].cy })
+	if len(bands) != 3 {
+		return fmt.Errorf("device: LED 밴드 %d개(3개 예상)", len(bands))
+	}
+	for bi := range bands {
+		ids := bands[bi].ids
+		sort.Slice(ids, func(a, b int) bool {
+			return v.leds[ids[a]].CX < v.leds[ids[b]].CX
+		})
+		bands[bi].ids = ids
+	}
+	for s := 0; s < 2; s++ {
+		var btns []int
+		for i := range v.buttons {
+			if v.buttons[i].sec == uint8(s) {
+				btns = append(btns, i)
+			}
+		}
+		sort.Slice(btns, func(a, b int) bool {
+			return v.buttons[btns[a]].rect[0] < v.buttons[btns[b]].rect[0]
+		})
+		if len(btns) != len(bands[s].ids) {
+			return fmt.Errorf("device: 섹션 %d 버튼 %d개 vs LED %d개", s, len(btns), len(bands[s].ids))
+		}
+		copy(v.secLEDs[s][:], bands[s].ids)
+	}
+	var steps []int
+	for i := range v.buttons {
+		if v.buttons[i].kind == bkStep {
+			steps = append(steps, i)
+		}
+	}
+	sort.Slice(steps, func(a, b int) bool { return v.buttons[steps[a]].arg < v.buttons[steps[b]].arg })
+	if len(steps) != len(bands[2].ids) {
+		return fmt.Errorf("device: 스텝 버튼 %d개 vs LED %d개", len(steps), len(bands[2].ids))
+	}
+	copy(v.fxLEDs[:], bands[2].ids)
+	return nil
+}
+
+// Update — 이 프레임의 입력 처리. Cmd 송신은 여기서만 일어난다.
+func (v *View) Update(ctx *core.Ctx) {
+	v.back, v.drop, v.resume, v.grabOK = false, false, false, false
+	v.runSweeps(ctx)
+	for i := range ctx.Pointers {
+		p := &ctx.Pointers[i]
+		si := v.findPtr(p.ID)
+		switch {
+		case p.JustPressed:
+			if si < 0 {
+				si = v.allocPtr(p.ID)
+			}
+			v.ptrs[si].seen = true
+			v.press(ctx, p, si)
+		case p.JustReleased:
+			if si >= 0 {
+				v.release(ctx, p, si)
+				v.freePtr(si)
+			}
+		default:
+			if si >= 0 {
+				v.ptrs[si].seen = true
+				v.movePtr(ctx, p, si)
+			}
+		}
+	}
+	// 이 프레임에 관측되지 않은 캡처는 놓친 릴리즈 — 탭 판정 없이 컨트롤을 놓고 정리한다.
+	// 잡은 노브를 그냥 두면 useLocal이 남아 표시값이 얼어붙는다(놓친 릴리즈 결함 클래스 봉쇄).
+	for i := v.nptrs - 1; i >= 0; i-- {
+		if !v.ptrs[i].seen {
+			v.dropPtr(i)
+		} else {
+			v.ptrs[i].seen = false
+		}
+	}
+	v.cacheDisplays(ctx)
+}
+
+func (v *View) findPtr(id int) int {
+	for i := 0; i < v.nptrs; i++ {
+		if v.ptrs[i].id == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func (v *View) allocPtr(id int) int {
+	if v.nptrs < len(v.ptrs) {
+		i := v.nptrs
+		v.nptrs++
+		v.ptrs[i] = ptrState{id: id}
+		return i
+	}
+	// 8개 초과 동시 포인터: 가장 오래된 슬롯을 놓고(노브 얼어붙음 방지) 끝에 재할당.
+	v.dropPtr(0)
+	i := v.nptrs
+	v.nptrs++
+	v.ptrs[i] = ptrState{id: id}
+	return i
+}
+
+func (v *View) freePtr(i int) {
+	last := v.nptrs - 1
+	if i != last {
+		v.ptrs[i] = v.ptrs[last]
+	}
+	v.nptrs = last
+}
+
+// dropPtr — 놓친 릴리즈 정리: 컨트롤을 놓는다(탭 아님). 스윕 중이 아니면 노브는
+// 브리지 값 추적으로 돌아간다.
+func (v *View) dropPtr(i int) {
+	if v.ptrs[i].kind == pkKnob {
+		kn := &v.knobs[v.ptrs[i].idx]
+		kn.held = false
+		if !kn.swActive {
+			kn.useLocal = false
+		}
+	}
+	v.freePtr(i)
+}
+
+// press — 포인터 누름. 히트 우선순위: 노브 > 패드 > 버튼 > 이름판.
+func (v *View) press(ctx *core.Ctx, p *core.Pointer, si int) {
+	st := &v.ptrs[si]
+	st.x0, st.y0, st.t0, st.longFired = p.X, p.Y, ctx.Now, false
+	if k := v.hitKnob(p.X, p.Y); k >= 0 {
+		st.kind, st.idx = pkKnob, k
+		st.grabVal = v.knobValue(ctx, &v.knobs[k])
+		v.grabKnob(ctx, k)
+		return
+	}
+	if pd := v.hitPad(p.X, p.Y); pd >= 0 {
+		st.kind, st.idx = pkPad, pd
+		return
+	}
+	st.kind, st.idx = pkNone, -1
+	if b := v.hitButton(p.X, p.Y); b >= 0 {
+		v.pressButton(ctx, b)
+		return
+	}
+	if v.hasTitle && rectHit(v.titlePlate, p.X, p.Y) {
+		v.back = true
+		return
+	}
+	for s := 0; s < 2; s++ {
+		if v.hasBassPlate[s] && rectHit(v.bassPlates[s], p.X, p.Y) {
+			v.selPart = engine.Part(s)
+			return
+		}
+	}
+}
+
+// movePtr — 눌린 채 이동. 잡은 컨트롤만 갱신한다(다른 컨트롤로 넘어가지 않는다).
+func (v *View) movePtr(ctx *core.Ctx, p *core.Pointer, si int) {
+	st := &v.ptrs[si]
+	switch st.kind {
+	case pkKnob:
+		kn := &v.knobs[st.idx]
+		val := clamp01(st.grabVal + float32((st.y0-p.Y)/dragRange))
+		kn.local = val
+		if val != kn.lastSent {
+			v.sendParam(ctx, kn, val)
+		}
+	case pkPad:
+		if !st.longFired && ctx.Now-st.t0 >= padHoldMute {
+			st.longFired = true
+			v.holdPad(ctx, st.idx)
+		}
+	}
+}
+
+// release — 놓음. 노브는 탭 판정(스윕), 패드는 탭(Trigger)·길게(뮤트 이미 발동) 판정.
+func (v *View) release(ctx *core.Ctx, p *core.Pointer, si int) {
+	st := &v.ptrs[si]
+	moved := math.Hypot(p.X-st.x0, p.Y-st.y0)
+	dur := ctx.Now - st.t0
+	switch st.kind {
+	case pkKnob:
+		v.releaseKnob(ctx, st.idx, moved, dur)
+	case pkPad:
+		if !st.longFired && dur < padHoldMute && moved < tapMoveMax {
+			v.tapPad(ctx, st.idx)
+		}
+	}
+}
+
+// cacheDisplays — 표시창 문자열 캐시. 값이 변화할 때만 재구성한다(rebuilds 카운터).
+func (v *View) cacheDisplays(ctx *core.Ctx) {
+	for s := 0; s < 2; s++ {
+		d := &v.disp[s]
+		if d.knob < 0 {
+			continue
+		}
+		kn := &v.knobs[d.knob]
+		val := v.knobValue(ctx, kn)
+		v99 := int32(val*99 + 0.5)
+		if v99 != d.val99 {
+			d.val99 = v99
+			nm := kn.name
+			if len(nm) > 3 {
+				nm = nm[:3]
+			}
+			b := append(v.scratch[:0], nm...)
+			b = append(b, ' ')
+			b = strconv.AppendInt(b, int64(v99), 10)
+			d.text = string(b) // 재구성 = 할당 — 값 변화 시에만
+			d.dirty = true
+			v.rebuilds++
+		}
+	}
+	bpm := int32(engine.BPMOf(ctx.Bridge.Param(engine.Tempo)) + 0.5)
+	bar := int32(ctx.Tick.Bar)
+	ph := ctx.Phase & 3
+	if bpm == v.bottom.bpm && bar == v.bottom.bar && ph == v.bottom.phase {
+		return
+	}
+	v.bottom.bpm, v.bottom.bar, v.bottom.phase = bpm, bar, ph
+	b := append(v.scratch[:0], "BPM "...)
+	b = strconv.AppendInt(b, int64(bpm), 10)
+	b = append(b, asciiSep...)
+	b = append(b, "BAR "...)
+	b = strconv.AppendInt(b, int64(bar), 10)
+	b = append(b, asciiSep...)
+	b = append(b, phaseNames[ph]...)
+	v.bottom.text = string(b)
+	v.bottom.dirty = true
+	v.rebuilds++
+}
+
+// BackTapped — 이 프레임에 이름판(title)이 탭됐는가(main.go가 방 뷰로 복귀).
+func (v *View) BackTapped() bool { return v.back }
+
+// JustGrabbed — 이 프레임에 사용자가 새로 잡은 노브(MANUAL 잠금용).
+func (v *View) JustGrabbed() (engine.ParamID, bool) { return v.grabID, v.grabOK }
+
+// ResumeTapped — rec 자리(라벨 RESUME) 탭 — 뷰는 Cmd 없이 보고만.
+func (v *View) ResumeTapped() bool { return v.resume }
+
+// DropTapped — play 자리(라벨 DROP) 탭. Drop Cmd는 뷰가 직접 보낸다.
+func (v *View) DropTapped() bool { return v.drop }
