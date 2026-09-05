@@ -12,5 +12,11 @@
 이용 조건은 fal.ai 약관과 Black Forest Labs 라이선스를 따르며, 확인 상태는
 docs/concepts/README.md 에 기록합니다.
 
+제3자 자산:
+- app/assets/font/atlas.png — Go Bold(golang.org/x/image/font/gofont, BSD-3-Clause, © The Go Authors)에서
+  tools/font/atlas.py로 만든 글리프 아틀라스. 라이선스 원문: https://go.dev/LICENSE
+- app/assets/room/plate-night.png — docs/concepts/room-attic-portrait-v2.png(FLUX.1 [dev])을 fal.ai esrgan으로
+  2배 업스케일 후 720×1280로 축소한 것(구도 동일). 응답 원본 docs/concepts/room-attic-portrait-v2.upscale.json.
+
 The MIT license covers code only. The name, the resident character, concept
 art and generated UI artwork listed above are all rights reserved.
