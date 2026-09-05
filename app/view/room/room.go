@@ -653,10 +653,9 @@ func (v *View) Draw(screen *ebiten.Image, ctx *core.Ctx) {
 		if s.radLift {
 			v.blit(screen, v.radSub, l.Radiator[0], l.Radiator[1]-radLiftPx, tr, tg, tb, 1)
 		}
-		if s.radGlow > 0 {
-			a := float32(radHiAlpha * (s.radGlow / radGlowSec))
-			v.fill(screen, l.Radiator[0], l.Radiator[1], l.Radiator[2], l.Radiator[3], tr, tg, tb, a)
-		}
+		// 하이라이트(rect 전체 반투명 흰 채움)는 2차 비전 판정에서 "회색 사각형"으로 읽혀 제거했다 —
+		// 바 경계의 "툭"은 1px 리프트만으로 낸다. radGlow 상태는 유지(플래시 모델 입력).
+		_ = s.radGlow
 	}
 
 	// 6) 머그 — 표면 떨림(1프레임)과 김
@@ -860,7 +859,10 @@ func (v *View) drawActor(dst, sub, pose *ebiten.Image, r core.Rect, anchor [2]fl
 	if src == nil {
 		return
 	}
-	if pose == nil && dx == 0 && dy == 0 && ang == 0 && scale == 1 {
+	if pose == nil {
+		// 포즈 스프라이트가 없으면 그리지 않는다(플레이트에 이미 있다). 서브이미지를 변형해 그리면 rect 안의
+		// 배경(기기 절반·창틀·바닥)이 함께 움직여 rect 네 변에서 그림이 갈라진다 — 2차 비전 판정(2026-09-06)
+		// 1순위 FIX. 컷아웃 스프라이트(알파 마스크)가 생기면 변형을 다시 켠다. 상태기계(dx·dy·ang·scale)는 유지.
 		return
 	}
 	var ps [2]int
