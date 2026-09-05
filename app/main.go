@@ -58,6 +58,11 @@ type integ struct {
 	lastBar   uint32
 	firstKnob bool
 	wallDrop  int // 마지막으로 벽시계 드롭을 보낸 시(hour), -1 = 없음
+
+	// 공유 URL 재생(?s=): 디코드된 엔트리를 블록 순서로 엔진에 보낸다. 재생이 남아 있는 동안
+	// 로컬 레지던트는 쉰다(로그 안에 만든 사람의 레지던트 궤적이 이미 들어 있다). 끝나면 레지던트가 이어 튼다.
+	shared    []session.Entry
+	sharedIdx int
 }
 
 func newInteg(word string) integ {
@@ -101,6 +106,22 @@ func (g *game) updateIntegration() {
 	}
 	barStart := t.Flags&engine.FlagBar != 0 || t.Bar != g.in.lastBar
 	g.in.lastBar = t.Bar
+	if g.in.sharedIdx < len(g.in.shared) {
+		// 공유 로그 재생: 현재 블록 + 8블록(≈21ms) 안에 든 엔트리를 순서대로 보낸다(호스트가 +2로 예약).
+		horizon := uint32(t.Block) + 8
+		for g.in.sharedIdx < len(g.in.shared) && g.in.shared[g.in.sharedIdx].Block <= horizon {
+			e := g.in.shared[g.in.sharedIdx]
+			g.ctx.Bridge.Cmd(e.Cmd, core.Replay) // Go 미러 로그에는 넣지 않는다(재공유 시 중복 방지)
+			if e.Cmd.Kind == engine.SetParam {
+				g.ctx.ResidentHand, g.ctx.ResidentHandOn = engine.ParamID(e.Cmd.A), true
+			}
+			g.in.sharedIdx++
+		}
+		if g.in.sharedIdx >= len(g.in.shared) {
+			g.in.shared = nil // 끝 — 다음 프레임부터 로컬 레지던트
+		}
+		return
+	}
 	for _, c := range g.in.res.Tick(resident.Input{Bar: t.Bar, Step: t.Step, Now: g.ctx.Now - g.in.startNow, BarStart: barStart}) {
 		g.send(c, core.Resident)
 	}
@@ -130,6 +151,9 @@ func newGame() (*game, error) {
 	g.ctx.Bridge = core.NewBridge()
 	g.ctx.Font = core.NewFontSet(assets.FontAtlasPNG, assets.FontAtlasJSON)
 	g.in = newInteg(g.ctx.Bridge.SeedWord())
+	if l := sharedLog(); l != nil {
+		g.in.shared = l.Entries
+	}
 	var err error
 	if g.room, err = room.New(&g.ctx); err != nil {
 		return nil, err

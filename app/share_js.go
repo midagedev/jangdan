@@ -11,6 +11,24 @@ import (
 	"github.com/midagedev/revirth/session"
 )
 
+// sharedLog — URL의 s= 파라미터(session.EncodeURL 형식)를 디코드한다. 없거나 깨지면 nil(부분 결과는 살린다).
+func sharedLog() *session.Log {
+	loc := js.Global().Get("location")
+	if !loc.Truthy() {
+		return nil
+	}
+	q := js.Global().Get("URLSearchParams").New(loc.Get("search"))
+	v := q.Call("get", "s")
+	if v.Type() != js.TypeString || v.String() == "" {
+		return nil
+	}
+	l, _ := session.DecodeURL(v.String())
+	if l == nil || len(l.Entries) == 0 {
+		return nil
+	}
+	return l
+}
+
 func installShare(g *game) {
 	js.Global().Set("jdShareURL", js.FuncOf(func(this js.Value, args []js.Value) any {
 		if g.in.log == nil || len(g.in.log.Entries) == 0 {

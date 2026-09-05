@@ -38,10 +38,10 @@
 <div id="tools" style="position:absolute;right:8px;bottom:8px;z-index:10;display:flex;gap:6px;font:12px system-ui">
   <button id="replay" style="padding:6px 10px;opacity:.85" onclick="window.jd.replay(15) ? this.textContent='3·2·1…' : this.textContent='replay n/a'; setTimeout(()=>this.textContent='replay 15s', 20000)">replay 15s</button>
   <button id="clean" style="padding:6px 10px;opacity:.85" onclick="this.textContent = window.jd.setCleanScreen(!window.jd.cleanScreen()) ? 'clean: on' : 'clean'">clean</button>
-  <button id="share" style="padding:6px 10px;opacity:.85" onclick="(async()=>{const u=window.jdShareURL&&window.jdShareURL(); if(!u){this.textContent='share n/a';return;} const full=location.origin+location.pathname+'?s='+u; try{await navigator.clipboard.writeText(full); this.textContent='copied '+u.length+'ch';}catch(e){prompt('share URL', full);} })()">share</button>
+  <button id="share" style="padding:6px 10px;opacity:.85" onclick="(async()=>{const u=window.jdShareURL&&window.jdShareURL(); if(!u){this.textContent='share n/a';return;} const full=location.origin+location.pathname+'?seed='+encodeURIComponent(document.getElementById('seedbox').value||'')+'&s='+u; try{await navigator.clipboard.writeText(full); this.textContent='copied '+u.length+'ch';}catch(e){prompt('share URL', full);} })()">share</button>
   <button id="sendreport" style="padding:6px 10px;opacity:.85" onclick="window.jdSendReport().then(t=>this.textContent=t)">Send report</button>
 </div>
-<style>body.clean #overlay, body.clean #tools { display: none; }</style>
+<style>body.clean #overlay, body.clean #tools, body.clean #seedtext { display: none !important; }</style>
 <script src="wasm_exec.js"></script>
 <script>
   const go = new Go();
