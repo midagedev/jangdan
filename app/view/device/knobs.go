@@ -6,6 +6,7 @@ package device
 
 import (
 	"math"
+	"strings"
 
 	"github.com/midagedev/revirth/app/core"
 	"github.com/midagedev/revirth/engine"
@@ -14,7 +15,8 @@ import (
 // knob — 레이아웃 노브 하나의 정적 기하 + 실행 상태.
 type knob struct {
 	name      string
-	sec       uint8 // secBassA..secFx
+	label     string // 패널에 그리는 표시명(드럼은 내부명과 다르다 — knobLabel)
+	sec       uint8  // secBassA..secFx
 	cx, cy, r float64
 	id        engine.ParamID
 
@@ -31,6 +33,19 @@ type knob struct {
 	swLastT   float64 // 마지막 송신 시각
 	swLastVal float32 // 마지막 송신 값
 	swSent    bool    // 스윕 중 송신 1회 이상
+}
+
+// knobLabel — 노브 위 라벨 표시명. 드럼 노브의 내부 파라미터명(BD_LEVEL)은 보이스명까지
+// 품고 있어 그대로 올리면 내부명이 노출된다 — 표시명(LEVEL)만 쓰고 보이스명은 패드 라벨이
+// 담당한다(비전 판정 2026-09-05 처방). 나머지 섹션은 레이아웃 이름 그대로.
+func knobLabel(sec uint8, name string) string {
+	if sec != secDrums {
+		return name
+	}
+	if i := strings.IndexByte(name, '_'); i >= 0 {
+		return name[i+1:]
+	}
+	return name
 }
 
 // hitKnob — 중심 거리 ≤ r+hitKnobPad. 여러 개가 겹치면 가장 가까운 것.

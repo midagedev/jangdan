@@ -21,7 +21,9 @@ import (
 // 스코프 스트로크 수치(스펙).
 const (
 	scopeStrokeWidth = 1.5
-	scopeAmpRatio    = 0.42 // 진폭 = rect 높이 × 0.42
+	scopeAmpRatio    = 0.42 // 진폭 = rect 높이 × 0.42(자동 이득 후 창의 peak가 채우는 목표)
+	scopeMaxGain     = 8    // 자동 이득 상한(및 peak < 0.05 창의 고정 이득)
+	scopeGainMinPeak = 0.05 // 이 이하는 노이즈 바닥으로 보고 ×8
 )
 
 // LED 상태 인덱스(ledImg).
@@ -58,12 +60,22 @@ func (v *View) ensureLayers(ctx *core.Ctx) {
 	}
 	for i := range v.knobs {
 		k := &v.knobs[i]
-		f.Draw(v.labelLayer, k.name, k.cx, k.cy+k.r+labelKnobDy, labelKnobScale, colLabel, core.AlignCenter)
+		dy := float64(knobDyMain)
+		if k.sec == secDrums {
+			dy = knobDyDrums
+		}
+		// 어두운 잉크: 라벨판이 밝은 크림이라 크림 라벨은 안 보였다(비전 처방).
+		f.Draw(v.labelLayer, k.label, k.cx, k.cy+k.r+dy, labelKnobScale, colInk, core.AlignCenter)
 	}
 	for i := range v.buttons {
 		b := &v.buttons[i]
 		cx, cy := b.rect.Center()
-		f.Draw(v.labelLayer, b.label, cx, cy, labelBtnScale, colLabel, core.AlignCenter)
+		col := colLabel
+		if b.kind == bkStep {
+			col = colInk // 스텝 숫자는 밝은 알약 위 — 어두운 잉크
+		}
+		sc := labelScale(f, b.label, labelBtnScale, b.rect[2]-labelFitPad)
+		f.Draw(v.labelLayer, b.label, cx, cy, sc, col, core.AlignCenter)
 	}
 	for i := range v.pads {
 		p := &v.pads[i]
@@ -72,16 +84,18 @@ func (v *View) ensureLayers(ctx *core.Ctx) {
 	}
 	if v.hasTitle {
 		cx, cy := v.titlePlate.Center()
-		f.Draw(v.labelLayer, "JANGDAN", cx, cy, labelTitleScale, colLabel, core.AlignCenter)
+		// 어두운 잉크 + 1.6배 + x+40(좌상단 DOM 시드 입력 회피) — 비전 처방.
+		f.Draw(v.labelLayer, "JANGDAN", cx+titleShiftX, cy, labelTitleScale, colInk, core.AlignCenter)
 	}
 	// 섹션 이름판: 왼쪽 정렬(+6px), 세로 중앙. 폰트가 ASCII라 구분자는 asciiSep로 대체.
+	// 크림판 위 크림 라벨은 안 보였다 — 어두운 잉크(비전 처방).
 	for i, txt := range [2]string{"DRUMS", "FX" + asciiSep + "SEQ"} {
 		if !v.hasSection[i] {
 			continue
 		}
 		r := v.sectionPlates[i]
 		_, lh := f.Measure(txt, labelSectionScale)
-		f.Draw(v.labelLayer, txt, r[0]+plateInset, r[1]+r[3]/2-lh/2, labelSectionScale, colLabel, core.AlignLeft)
+		f.Draw(v.labelLayer, txt, r[0]+plateInset, r[1]+r[3]/2-lh/2, labelSectionScale, colInk, core.AlignLeft)
 	}
 	for s, txt := range [2]string{"BASSLINE A", "BASSLINE B"} {
 		if !v.hasBassPlate[s] {
@@ -89,8 +103,27 @@ func (v *View) ensureLayers(ctx *core.Ctx) {
 		}
 		r := v.bassPlates[s]
 		_, lh := f.Measure(txt, labelSectionScale)
-		f.Draw(v.labelLayer, txt, r[0]+plateInset, r[1]+r[3]/2-lh/2, labelSectionScale, colLabel, core.AlignLeft)
+		f.Draw(v.labelLayer, txt, r[0]+plateInset, r[1]+r[3]/2-lh/2, labelSectionScale, colInk, core.AlignLeft)
 	}
+}
+
+// shrinkScale — 측정 폭 w가 예산 maxW를 넘으면 base에서 비례 축소(하한 labelFloor).
+// 순수 함수 — 단언은 이 함수에 걸고 폰트 실측은 labelScale이 잇는다.
+func shrinkScale(base, w, maxW float64) float64 {
+	if w <= maxW || w <= 0 {
+		return base
+	}
+	s := base * maxW / w
+	if s < labelFloor {
+		return labelFloor
+	}
+	return s
+}
+
+// labelScale — 라벨 문자열의 폰트 실측 폭으로 shrinkScale을 적용한 스케일.
+func labelScale(f *core.FontSet, s string, base, maxW float64) float64 {
+	w, _ := f.Measure(s, base)
+	return shrinkScale(base, w, maxW)
 }
 
 // drawLEDs — 베이스라인 섹션 10개(파형·모드·옥타브·슬롯) + fx 16개(현재 스텝=밝음,
@@ -222,7 +255,10 @@ func (v *View) overlayRect(screen *ebiten.Image, r core.Rect, tex *ebiten.Image,
 	v.op.GeoM.Scale(r[2], r[3])
 	v.op.GeoM.Translate(r[0], r[1])
 	v.op.ColorScale.Reset()
-	v.op.ColorScale.Scale(1, 1, 1, alpha)
+	// ColorScale은 프리멀티플라이드 색에 곱해진다(ebiten 문서: ColorM.Scale(r,g,b,a) ≡
+	// ColorScale.Scale(r*a,g*a,b*a,a)). 불투명 원본에서 rgb을 1로 두면 source-over의
+	// src.rgb + dst×(1−a)가 상한 클램프돼 알파 1 순백 사각이 된다 — rgb도 알파만큼.
+	v.op.ColorScale.Scale(alpha, alpha, alpha, alpha)
 	screen.DrawImage(tex, &v.op)
 }
 
@@ -250,8 +286,9 @@ func (v *View) blitDisplay(screen *ebiten.Image, ctx *core.Ctx, slot int, r core
 	if *dirty {
 		img.Clear()
 		if *text != "" && ctx.Font != nil {
-			cx, cy := r.Center()
-			ctx.Font.Draw(img, *text, cx, cy, scale, colLCD, core.AlignCenter)
+			// img은 rect와 같은 크기의 로컬 캔버스 — 스크린 좌표(r.Center)를 넣으면 글줄이
+			// 캔버스 밖에 놓여 아무 것도 안 그려진다(하단 표시창 미표시의 원인). 로컬 중심.
+			ctx.Font.Draw(img, *text, r[2]/2, r[3]/2, scale, colLCD, core.AlignCenter)
 		}
 		*dirty = false
 	}
@@ -261,13 +298,16 @@ func (v *View) blitDisplay(screen *ebiten.Image, ctx *core.Ctx, slot int, r core
 	screen.DrawImage(img, &v.op)
 }
 
-// drawScope — 스코프 rect에 Bridge.Scope 256샘플 폴리라인. 파형이 없으면 중앙 수평선.
+// drawScope — 스코프 rect에 Bridge.Scope 256샘플 폴리라인. 진폭은 자동 이득: 현재 창의
+// peak가 rect 높이 0.42를 채우도록 스케일한다(상한 ×8, peak < 0.05는 ×8) — 소리 피크가
+// 0.3~0.4라 고정 스케일에서 선이 납작했던 수정(비전 처방). 파형이 없으면 중앙 수평선.
 func (v *View) drawScope(screen *ebiten.Image, ctx *core.Ctx) {
 	r := v.scopeRect
 	mid := r[1] + r[3]/2
 	amp := r[3] * scopeAmpRatio
 	v.wave.Reset()
 	if ctx.Bridge.Scope(v.scopeBytes[:]) {
+		peak := float32(0)
 		for i := 0; i < scopeSamples; i++ {
 			s := math.Float32frombits(binary.LittleEndian.Uint32(v.scopeBytes[4*i:]))
 			if s > 1 {
@@ -275,8 +315,17 @@ func (v *View) drawScope(screen *ebiten.Image, ctx *core.Ctx) {
 			} else if s < -1 {
 				s = -1
 			}
+			v.scopeF32[i] = s
+			if s > peak {
+				peak = s
+			} else if -s > peak {
+				peak = -s
+			}
+		}
+		gain := scopeGain(peak)
+		for i := 0; i < scopeSamples; i++ {
 			x := r[0] + r[2]*float64(i)/float64(scopeSamples-1)
-			y := mid - amp*float64(s)
+			y := mid - amp*float64(v.scopeF32[i]*gain)
 			if i == 0 {
 				v.wave.MoveTo(float32(x), float32(y))
 			} else {
@@ -288,6 +337,18 @@ func (v *View) drawScope(screen *ebiten.Image, ctx *core.Ctx) {
 		v.wave.LineTo(float32(r[0]+r[2]), float32(mid))
 	}
 	vector.StrokePath(screen, &v.wave, &v.strokeOpts, &v.drawOpts)
+}
+
+// scopeGain — 자동 이득: peak ≥ 0.05면 1/peak(상한 8), 그 밑은 8. 순수 함수(단언 대상).
+func scopeGain(peak float32) float32 {
+	if peak < scopeGainMinPeak {
+		return scopeMaxGain
+	}
+	g := 1 / peak
+	if g > scopeMaxGain {
+		return scopeMaxGain
+	}
+	return g
 }
 
 // initStrokeOpts — 스코프 스트로크 옵션(불변, New에서 1회).
