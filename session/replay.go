@@ -31,12 +31,17 @@ func Replay(e *engine.Engine, l *Log, upToBlock uint32, out func(block uint32, b
 // 스텝 경계 적용이다. 엔진의 Step()/Bar() 변화(bar*16+step 서수)를 감시해 stepCount개
 // 스텝에 도달하면 멈춘다(스텝 0..stepCount-1 재생). 엔진 시계와 유도 블록이 1블록
 // 미끄러진 극단 경계에서는 적용이 한 블록 일찍/늦게 날 수 있다(들어도 2.7ms).
+//
+// 정지 방어(2026-09-06, P2-session 라운드 발견): 로그에 Transport 정지가 있으면 엔진 시계가
+// 동결되어 stepsEntered가 영원히 stepCount에 닿지 않는다. 블록 상한(스텝당 최대 56.25블록인
+// 100 BPM 기준 64블록 × stepCount + 여유)에서 끊는다 — 정지된 로그는 "그만큼 렌더하고 끝".
 func ReplaySteps(e *engine.Engine, entries []Entry, stepCount int, out func(block uint32, buf []float32)) {
 	e.Apply(engine.Cmd{Kind: engine.ResetPos})
 	var buf [2 * engine.Block]float32
 	i := 0
 	b := uint32(0)
-	for stepsEntered(e) < stepCount {
+	maxBlocks := uint32(stepCount)*replayMaxBlocksPerStep + replayMaxBlocksPerStep
+	for stepsEntered(e) < stepCount && b < maxBlocks {
 		for i < len(entries) && entries[i].Block <= b {
 			e.Apply(entries[i].Cmd)
 			i++
@@ -48,6 +53,9 @@ func ReplaySteps(e *engine.Engine, entries []Entry, stepCount int, out func(bloc
 		b++
 	}
 }
+
+// replayMaxBlocksPerStep — ReplaySteps 블록 상한 계수(최저 템포 100 BPM = 스텝당 56.25블록 < 64).
+const replayMaxBlocksPerStep = 64
 
 // stepsEntered — 재생 시작 후 진입한 스텝 서수(스텝 0 진입 = 0).
 func stepsEntered(e *engine.Engine) int {
