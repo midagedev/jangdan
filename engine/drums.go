@@ -1,74 +1,101 @@
-// 드럼 — BD(사인 + 피치 스윕 + 앰프 엔벨로프), CH(노이즈 → 1극 HPF → 짧은 엔벨로프).
+// drums.go — 드럼 키트(T1b 소유 파일). engine.go가 호출하는 메서드 집합이 계약이다:
 //
-// 이 파일의 곱셈-덧셈은 전부 mul32(a,b)+z 궁 — FMA 융합 차단 계약(approx.go
-// 파일 주석의 실측 근거 참조. 특히 이 파일의 HPF 한 줄이 정체성 변환 패턴으로
-// FMADDS로 융합돼 네이티브·wasm 해시가 갈렸던 최초의 발견 지점이다).
+//	init(seed)                          New/Reset
+//	setParam(voice, which int, q float32)  voice 0..5 = BD SD CH OH CP CY, which 0=Level 1=Tune
+//	trigger(voice int, accent bool)     원샷(시퀀서·패드·드롭)
+//	process(noise *xorshift32) (mix, bd float32)   샘플 1개. mix = 6보이스 합(레벨 적용), bd = BD 단독(사이드체인용)
+//
+// 현재 내용은 스탠드인(BD 사인 스윕, 나머지는 노이즈+HPF+엔벨로프 변형)이다. T1b 라운드가
+// 브리지드-T BD·SD 톤+노이즈·6비트 금속 노이즈 햇·CP 4연타·CY 밴드 2개로 교체한다
+// (docs/impl-plan-2026-09-05.md §2.6). 이 파일의 곱셈-덧셈은 전부 mul32(a,b)+z 꼴.
 package engine
 
-// 감쇠 계수는 exp(−1/(τ·SR))을 상수로 사전 계산해 박아둔다(핫 루프 밖).
-// BD 피치: 110Hz → 50Hz 플로어, 시정수 ~20ms.
-// BD 앰프: 시정수 ~0.35s(스탠드인 — 데시션은 후속 라운드).
-// CH 앰프: 시정수 ~50ms. HPF 계수 0.6.
 const bdFreqDecay float32 = 0.99973271
 const bdAmpDecay float32 = 0.99994048
-const chDecay float32 = 0.99958344
-const chHPCoef float32 = 0.6
 
-// bdVoice — 사인(위상 누적 + 5차 다항 근사) + 지수 피치 스윕 + 지수 앰프 엔벨로프.
-type bdVoice struct {
-	phase float32
-	freq  float32
-	amp   float32
-	on    bool
+type drumVoice struct {
+	phase, freq, amp, hpz float32
+	on                    bool
+	level, tune           float32
+	decay                 float32
+	hp                    float32
 }
 
-func (v *bdVoice) trigger() {
+type drumKit struct {
+	v [NumDrums]drumVoice
+}
+
+func (d *drumKit) init(seed uint32) {
+	*d = drumKit{}
+	// 스탠드인 감쇠: CH 50ms, OH 300ms, SD 150ms, CP 120ms, CY 900ms (샘플당 계수)
+	dec := [NumDrums]float32{bdAmpDecay, 0.99986, 0.99958344, 0.99993, 0.99983, 0.99998}
+	hp := [NumDrums]float32{0, 0.3, 0.6, 0.6, 0.4, 0.7}
+	for i := range d.v {
+		d.v[i].decay = dec[i]
+		d.v[i].hp = hp[i]
+		d.v[i].level = 0.8
+		d.v[i].tune = 0.5
+	}
+}
+
+func (d *drumKit) setParam(voice, which int, q float32) {
+	if voice < 0 || voice >= NumDrums {
+		return
+	}
+	if which == 0 {
+		d.v[voice].level = q
+	} else {
+		d.v[voice].tune = q
+	}
+}
+
+func (d *drumKit) trigger(voice int, accent bool) {
+	if voice < 0 || voice >= NumDrums {
+		return
+	}
+	v := &d.v[voice]
 	v.phase = 0
-	v.freq = 110
+	v.freq = mul32(v.tune, 80) + 70
 	v.amp = 1
+	if accent {
+		v.amp = 1.3
+	}
 	v.on = true
 }
 
-func (v *bdVoice) process() float32 {
-	if !v.on {
-		return 0
+func (d *drumKit) process(n *xorshift32) (float32, float32) {
+	var mix, bd float32
+	for i := range d.v {
+		v := &d.v[i]
+		if !v.on {
+			continue
+		}
+		v.amp = v.amp * v.decay
+		var s float32
+		if i == 0 {
+			v.freq = v.freq * bdFreqDecay
+			if v.freq < 50 {
+				v.freq = 50
+			}
+			v.phase = v.phase + v.freq/SampleRate
+			if v.phase >= 1 {
+				v.phase -= 1
+			}
+			h := v.phase - 0.5
+			s = sin5(mul32(twoPiF, h))
+		} else {
+			u := float32(n.next()&0xFFFF) / 65536.0
+			nn := mul32(2, u) - 1
+			dd := nn - v.hpz
+			v.hpz = mul32(v.hp, dd) + v.hpz
+			s = v.hpz
+		}
+		s = mul32(s, v.amp)
+		s = mul32(s, v.level)
+		if i == 0 {
+			bd = s
+		}
+		mix += s
 	}
-	v.freq = v.freq * bdFreqDecay
-	if v.freq < 50 {
-		v.freq = 50
-	}
-	v.amp = v.amp * bdAmpDecay
-	v.phase = v.phase + v.freq/SampleRate
-	if v.phase >= 1 {
-		v.phase -= 1
-	}
-	h := v.phase - 0.5 // [-0.5, 0.5)
-	x := mul32(twoPiF, h) // [-π, π)
-	s := sin5(x)
-	return mul32(s, v.amp)
-}
-
-// chVoice — xorshift 노이즈 → 1극 하이패스 → 짧은 지수 엔벨로프.
-type chVoice struct {
-	amp float32
-	hpz float32
-	on  bool
-}
-
-func (v *chVoice) trigger() {
-	v.amp = 1
-	v.on = true
-}
-
-func (v *chVoice) process(n *xorshift32) float32 {
-	if !v.on {
-		return 0
-	}
-	v.amp = v.amp * chDecay
-	u := float32(n.next()&0xFFFF) / 65536.0 // [0,1)
-	w := mul32(2, u)
-	nn := w - 1 // [-1,1)
-	d := nn - v.hpz
-	v.hpz = mul32(chHPCoef, d) + v.hpz
-	return v.hpz
+	return mix, bd
 }

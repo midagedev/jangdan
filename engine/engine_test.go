@@ -13,7 +13,7 @@
 // | 클램프(SetParam)              | TestSetParamClamp: 2.0→1.0, -1→0, id≥NumParams 무시 | 클램프 분기 제거 시 "SetParam(2.0) → 2, want 1.0"로 실패 확인 |
 // | 길이 불일치 Render 무동작       | TestRenderLenMismatch: 잘못된 len은 0 유지   | 길이 가드 제거 시 "panic: index out of range [255] with length 255"로 실패 확인 |
 // | FMA(정적 규칙)                | 리드가 grep으로 검사(스펙 명시) — 여기선 go vet 통과만 | (리드 소유) |
-// | 결정론(파라미터 이력 포함)     | TestDeterminismWithParamChanges             | 두 번째 실행 Cutoff +0.001 오프셋 → "샘플 14400 불일치"로 실패 확인 |
+// | 결정론(파라미터 이력 포함)     | TestDeterminismWithParamChanges             | 두 번째 실행 CutoffA +0.001 오프셋 → "샘플 14400 불일치"로 실패 확인 |
 package engine
 
 import (
@@ -81,8 +81,8 @@ func TestRenderNoAllocs(t *testing.T) {
 // 4. 무할당 — SetParam. FAIL-first: SetParam 안에 make 1줄을 넣으면 실패함을 확인했다.
 func TestSetParamNoAllocs(t *testing.T) {
 	e := New(1)
-	e.SetParam(Cutoff, 0.5)
-	n := testing.AllocsPerRun(1000, func() { e.SetParam(Cutoff, 0.7) })
+	e.SetParam(CutoffA, 0.5)
+	n := testing.AllocsPerRun(1000, func() { e.SetParam(CutoffA, 0.7) })
 	if n != 0 {
 		t.Fatalf("SetParam 할당: %v (무할당 계약 위반)", n)
 	}
@@ -121,15 +121,15 @@ func TestOutputBounds(t *testing.T) {
 	t.Logf("300s peak=%v rms=%v", peak, rms)
 }
 
-// 6. 클램프 — SetParam 범위 밖 입력 정규화. FAIL-first: 클램프 분기 제거 시 Param(Cutoff)이 2.0을 반환해 실패함을 확인했다.
+// 6. 클램프 — SetParam 범위 밖 입력 정규화. FAIL-first: 클램프 분기 제거 시 Param(CutoffA)이 2.0을 반환해 실패함을 확인했다.
 func TestSetParamClamp(t *testing.T) {
 	e := New(1)
-	e.SetParam(Cutoff, 2.0)
-	if got := e.Param(Cutoff); got != 1.0 {
+	e.SetParam(CutoffA, 2.0)
+	if got := e.Param(CutoffA); got != 1.0 {
 		t.Fatalf("SetParam(2.0) → %v, want 1.0 (클램프 계약)", got)
 	}
-	e.SetParam(Resonance, -1)
-	if got := e.Param(Resonance); got != 0 {
+	e.SetParam(BassAParams+BReso, -1)
+	if got := e.Param(BassAParams+BReso); got != 0 {
 		t.Fatalf("SetParam(-1) → %v, want 0 (클램프 계약)", got)
 	}
 	e.SetParam(NumParams+2, 0.5) // 무시 — 패닉 없음
@@ -176,7 +176,7 @@ func TestRenderLenMismatch(t *testing.T) {
 
 // 8. 결정론(파라미터 이력 포함) — 같은 seed + 같은 SetParam 이력이면 같은 샘플.
 //    UI 슬라이더가 두드리는 경로(렌더 중 파라미터 변경)에도 무할당·결정론이
-//    들어맞는지 검증한다. FAIL-first: 두 번째 실행의 Cutoff에 +0.001 오프셋을
+//    들어맞는지 검증한다. FAIL-first: 두 번째 실행의 CutoffA에 +0.001 오프셋을
 //    주자 "샘플 14400 불일치"로 즉시 실패함을 확인했다.
 func TestDeterminismWithParamChanges(t *testing.T) {
 	run := func() []float32 {
@@ -185,8 +185,8 @@ func TestDeterminismWithParamChanges(t *testing.T) {
 		total := make([]float32, 0, SampleRate*2*2)
 		for i := 0; i < SampleRate*2/Block; i++ {
 			if i%100 == 0 { // 렌더 중 파라미터 이력 — 양 엔진이 같은 순서로
-				e.SetParam(Cutoff, float32(i)/2000.0)
-				e.SetParam(Resonance, float32(i%50)/50.0)
+				e.SetParam(CutoffA, float32(i)/2000.0)
+				e.SetParam(BassAParams+BReso, float32(i%50)/50.0)
 				e.SetParam(Tempo, float32(i%40)/40.0)
 			}
 			e.Render(buf)
@@ -200,5 +200,104 @@ func TestDeterminismWithParamChanges(t *testing.T) {
 		if a[i] != b[i] {
 			t.Fatalf("샘플 %d 불일치: %v vs %v (파라미터 이력이 같은데 다름)", i, a[i], b[i])
 		}
+	}
+}
+
+
+// 10. 상태 왕복 — WriteState→ReadState 후 파라미터·패턴·슬롯·뮤트가 같고, 같은 위치에서 이어 렌더한
+//     샘플이 원본과 바이트 단위로 같다(제어 상태만 복원 = 보이스 상태 무관하려면 바 경계 + 새 엔진 비교).
+//     FAIL-first: ReadState의 params 루프를 건너뛰자 "Param 1 불일치"로 실패 확인.
+func TestStateRoundTrip(t *testing.T) {
+	a := New(5)
+	a.Apply(Cmd{Kind: SetParam, A: uint8(CutoffA), V: 0.9})
+	a.Apply(Cmd{Kind: BassStep, A: 0, B: 3, C: 30, D: StepGate | StepSlide})
+	a.Apply(Cmd{Kind: DrumStep, A: uint8(SD), B: 7, D: StepGate | StepAccent})
+	a.Apply(Cmd{Kind: Mute, A: uint8(OH), B: 1})
+	a.Apply(Cmd{Kind: SelectPattern, A: 1, B: 3})
+	var buf [StateSize]byte
+	if n := a.WriteState(buf[:]); n != StateSize {
+		t.Fatalf("WriteState %d", n)
+	}
+	b := New(5)
+	if !b.ReadState(buf[:]) {
+		t.Fatal("ReadState false")
+	}
+	for i := 0; i < int(NumParams); i++ {
+		if a.ParamQ(ParamID(i)) != b.ParamQ(ParamID(i)) {
+			t.Fatalf("Param %d 불일치", i)
+		}
+	}
+	if n, f := b.BassStepAt(BassA, 3); n != 30 || f != StepGate|StepSlide {
+		t.Fatalf("BassStep 불일치 %d %d", n, f)
+	}
+	if b.DrumStepAt(SD, 7) != StepGate|StepAccent || !b.Muted(OH) {
+		t.Fatal("DrumStep/Mute 불일치")
+	}
+	var short [10]byte
+	if b.ReadState(short[:]) {
+		t.Fatal("짧은 입력을 받아들임")
+	}
+	// 같은 제어 상태의 두 새 엔진은 같은 샘플을 낸다
+	c := New(5)
+	c.ReadState(buf[:])
+	x := make([]float32, 2*Block)
+	y := make([]float32, 2*Block)
+	for i := 0; i < 400; i++ {
+		b.Render(x)
+		c.Render(y)
+		for j := range x {
+			if x[j] != y[j] {
+				t.Fatalf("블록 %d 샘플 %d 불일치", i, j)
+			}
+		}
+	}
+}
+
+// 11. Apply 정규화 — 범위 밖 step/slot/note는 마스킹·클램프, 파트 범위 밖은 무동작. Apply 무할당.
+//     FAIL-first: note 클램프 제거 시 ReadState 왕복에서 note 200이 그대로 남아 "note 200"으로 실패.
+func TestApplyNormalizeAndNoAlloc(t *testing.T) {
+	e := New(1)
+	e.Apply(Cmd{Kind: BassStep, A: 0, B: 19, C: 200, D: 0xFF})
+	if n, f := e.BassStepAt(BassA, 3); n != MaxNote || f != StepGate|StepSlide|StepAccent {
+		t.Fatalf("정규화 실패 note %d flags %d", n, f)
+	}
+	e.Apply(Cmd{Kind: DrumStep, A: 9, B: 0, D: StepGate})
+	e.Apply(Cmd{Kind: Mute, A: 9, B: 1})
+	e.Apply(Cmd{Kind: SelectPattern, A: 0, B: 11})
+	buf := make([]float32, 2*Block)
+	e.Render(buf)
+	for i := 0; i < 16; i++ {
+		e.Render(buf) // 바 경계 통과 → 슬롯 3 적용
+	}
+	if e.Slot(BassA) != 3 {
+		t.Fatalf("슬롯 %d, want 3", e.Slot(BassA))
+	}
+	n := testing.AllocsPerRun(1000, func() { e.Apply(Cmd{Kind: SetParam, A: uint8(Drive), V: 0.3}) })
+	if n != 0 {
+		t.Fatalf("Apply 할당 %v", n)
+	}
+}
+
+// 12. 드롭 — Drop 명령은 다음 바 경계에 FlagDrop·CY 트리거·뮤트 해제.
+//     FAIL-first: onStep의 dropPending 분기를 지우면 "드롭 미발동"으로 실패 확인.
+func TestDropAtBar(t *testing.T) {
+	e := New(3)
+	buf := make([]float32, 2*Block)
+	e.Render(buf)
+	e.Apply(Cmd{Kind: Mute, A: uint8(BD), B: 1})
+	e.Apply(Cmd{Kind: Drop})
+	fired := false
+	for i := 0; i < 1000; i++ { // 1바 ≈ 692블록(130BPM)
+		e.Render(buf)
+		if e.Flags()&FlagDrop != 0 {
+			if e.Flags()&FlagBar == 0 || e.Flags()&(1<<CY) == 0 {
+				t.Fatal("드롭 블록에 바 경계·CY 비트 없음")
+			}
+			fired = true
+			break
+		}
+	}
+	if !fired || e.Muted(BD) {
+		t.Fatal("드롭 미발동 또는 뮤트 미해제")
 	}
 }
