@@ -63,7 +63,8 @@ wasm: raw 4278 bytes / gzip 1989 bytes(wasm-opt -O3 적분, 최적화 전 4440 b
 | chromium(headless) | 16 | 303.8 | 1000.0* | 11.39% | 0 |
 | webkit(headless) | 1 | 18.4 | 1000.0* | 0.69% | 1 |
 | chrome(**헤디드**) | 1 | 16.3 | 1000.0* | 0.61% | 1 |
-| iOS Safari 26.2 (`iPhone`, 기기 확인 중) | 1 | 10.1 | 1000.0* | 0.38% | 원시 3372(4블록 버스트 오판) → 버스트 인식 판정으로 재측정 예정 |
+| **iPhone 실기** Safari 26.6.1 (Pages 경유, 30s) | 1 | 12.1 | 1000.0* | **0.45%** | **0** (원시 >8ms도 0, 최빈 간격 3ms = 블록당 콜백, max 3ms) |
+| iOS 시뮬레이터 Safari 26.2 (36s) | 1 | 10.1 | 1000.0* | 0.38% | 원시 3372 = 4블록 버스트 오판(시뮬레이터 고유), 버스트 인식 판정으로 0 |
 | Safari(macOS) | — | 수동(위 절차) | | | |
 
 \* 워클릿에 `performance`가 없어 `Date.now()` 폴백(1ms 양자화) — max는
@@ -84,8 +85,8 @@ wasm: raw 4278 bytes / gzip 1989 bytes(wasm-opt -O3 적분, 최적화 전 4440 b
   융합되는 것은 `float32(x)*y+z`, `float32(x*y+z)` 처럼 감싼 위치가 틀린 형태이며, 원래
   두 지점도 그 부류였을 가능성이 높다. mul32는 실수를 grep으로 잡기 쉬운 형태라 유지하고,
   최종 게이트는 `tools/check-fma.sh`(엔진 네이티브 빌드 objdump에 FMADD/FMSUB 0개)다.
-- **iOS Safari(WebKit 26.2, `iPhone` 플랫폼)는 하드웨어 콜백 1회에 128프레임 블록
-  4개를 몰아 렌더한다**(2026-09-05 실측: 36초 13500블록에서 원시 ">8ms 간격" 카운트가
+- **iOS 시뮬레이터 Safari(26.2)는 하드웨어 콜백 1회에 128프레임 블록 4개를 몰아 렌더한다**
+  — 실기 iPhone(Safari 26.6.1)은 블록당 콜백(최빈 간격 3ms)이라 버스트는 시뮬레이터 고유 동작이다(2026-09-05 실측: 36초 13500블록에서 원시 ">8ms 간격" 카운트가
   3372 = 블록/4.0). 그래서 "연속 process() 간격 > 8ms"라는 원시 스톨 프록시는 iOS에서
   버스트 주기마다 1회 찍혀 언더런이 아닌 것을 스톨로 센다. 판정을 바꿨다: 워클릿이
   간격 히스토그램(정수 ms)을 보내고, 메인이 최빈 비영 간격을 버스트 주기로 보아
@@ -126,3 +127,9 @@ wasm: raw 4278 bytes / gzip 1989 bytes(wasm-opt -O3 적분, 최적화 전 4440 b
 - 폴리BLEP 톱니·슬라이드·정확한 303/808/909 모델 — 후속 라운드(스탠드인 명시).
 - 파일: `dump-native/`, `dump-wasm.mjs`은 해시 디버깅용 상설 도구(첫 불일치
   샘플 탐색). 재사용: 양쪽 덤프 → python 비교.
+
+## 원격 리포트 (2026-09-05)
+
+Pages(https://midagedev.github.io/jangdan/worklet/)에서 Send report → Worker `jangdan-reports`(KV) → `bash tools/reports-pull.sh`로 `results/remote/`에 회수.
+iPhone 실기 첫 리포트 `20260905T133211Z-iphone-*.json`: contextSampleRate 48000, baseLatency 0, renderUsMean 12.1µs, loadPctMean 0.45%(게이트 ≤50%), stalls 0 / 30s.
+남은 게이트: 5분 언더런 0(실기 5분 측정 1회).
