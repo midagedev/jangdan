@@ -98,4 +98,34 @@ func jd_muted(part uint32) uint32 {
 //export jd_slot
 func jd_slot(part uint32) uint32 { return uint32(eng.Slot(engine.Part(part))) }
 
+// Phase 2(§12): 조성·코드 트랙·모드·트랜스포트 읽기.
+//
+//export jd_key
+func jd_key() uint32 { return uint32(eng.KeyRoot()) }
+
+//export jd_chord
+func jd_chord(bar uint32) uint32 {
+	d, f := eng.Chord(int(bar))
+	return uint32(d) | uint32(f)<<8
+}
+
+//export jd_mode
+func jd_mode(part uint32) uint32 {
+	m, d := eng.Mode(engine.Part(part))
+	return uint32(m) | uint32(d)<<8
+}
+
+// jd_sync — 섀도 엔진(메인 스레드 UI 미러)용: 바 경계 대기값 즉시 반영. 렌더 엔진에서는 부르지 않는다.
+//
+//export jd_sync
+func jd_sync() { eng.SyncPending() }
+
+//export jd_playing
+func jd_playing() uint32 {
+	if eng.Playing() {
+		return 1
+	}
+	return 0
+}
+
 func main() {}

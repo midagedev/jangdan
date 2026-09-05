@@ -1,29 +1,41 @@
-// state.go — 제어 상태 직렬화(키프레임). 리드 소유(docs/impl-plan-2026-09-05.md §2.3이 원본).
+// state.go — 제어 상태 직렬화(키프레임). 리드 소유(docs/impl-plan-2026-09-05.md §2.3·§12가 원본).
 //
-// 키프레임은 바 경계의 제어 상태다: 파라미터·패턴·슬롯·뮤트. 보이스 내부 상태(필터 메모리·
-// 엔벨로프·딜레이 버퍼)는 포함하지 않는다 — 복원은 바 경계에서만 의미가 있다.
-// 레이아웃(리틀엔디언, 고정 StateSize 바이트):
-//   [0..2)          magic 'J','1'
-//   [2..68)         params[33] uint16
-//   [68..580)       bass 패턴 2파트 × 8슬롯 × 16스텝 × (note u8, flags u8)
-//   [580..676)      drum 패턴 6보이스 × 16스텝 × flags u8
-//   [676..678)      선택 슬롯 BassA, BassB
-//   [678]           뮤트 비트(bit part)
-//   [679..684)      예약(0)
-// ReadState는 검증 후 폐기가 아니라 재정규화한다(note>MaxNote → MaxNote, flags 마스킹, 슬롯 &7).
+// 키프레임은 바 경계의 제어 상태다: 파라미터·패턴·슬롯·뮤트·조성·코드 트랙·모드·트랜스포트.
+// 보이스 내부 상태(필터 메모리·엔벨로프·딜레이 버퍼)는 포함하지 않는다 — 복원은 바 경계에서만 의미가 있다.
+// 레이아웃 v2(리틀엔디언, 고정 StateSize 바이트):
+//
+//	[0..2)          magic 'J','2'
+//	[2..68)         params[33] uint16
+//	[68..580)       bass 패턴 2파트 × 8슬롯 × 16스텝 × (note u8 = 도수 표기, flags u8)
+//	[580..676)      drum 패턴 6보이스 × 16스텝 × flags u8
+//	[676..678)      선택 슬롯 BassA, BassB
+//	[678]           뮤트 비트(bit part)
+//	[679]           keyRoot(0..11)
+//	[680..682)      파트별 mode | dir<<2 (BassA, BassB)
+//	[682]           playing(0|1)
+//	[683..691)      코드 트랙 8마디 × (degree | flags<<3)
+//	[691..696)      예약(0)
+//
+// ReadState는 검증 후 폐기가 아니라 재정규화한다(note>MaxNote → MaxNote, flags 마스킹, 슬롯 &7,
+// 키 %12, 도수 %7, 모드·방향 범위 밖은 0). v1('J','1', 684바이트)은 거부한다 — 지속 저장된
+// 키프레임은 없고(메모리·리플레이 전용) note 의미가 절대음→도수로 바뀌어 호환이 없다.
 // 이 파일에는 곱셈-덧셈이 없다.
 package engine
 
 const (
 	stateMagic0 = 'J'
-	stateMagic1 = '1'
+	stateMagic1 = '2'
 
-	offParams   = 2
-	offBassPat  = offParams + 2*int(NumParams)                        // 68
-	offDrumPat  = offBassPat + 2*PatternSlots*Steps*2                 // 580
-	offSlots    = offDrumPat + NumDrums*Steps                         // 676
-	offMute     = offSlots + 2                                        // 678
-	StateSize   = offMute + 1 + 5                                     // 684
+	offParams  = 2
+	offBassPat = offParams + 2*int(NumParams)        // 68
+	offDrumPat = offBassPat + 2*PatternSlots*Steps*2 // 580
+	offSlots   = offDrumPat + NumDrums*Steps         // 676
+	offMute    = offSlots + 2                        // 678
+	offKey     = offMute + 1                         // 679
+	offMode    = offKey + 1                          // 680 (2바이트)
+	offPlaying = offMode + 2                         // 682
+	offChord   = offPlaying + 1                      // 683 (8바이트)
+	StateSize  = offChord + ChordBars + 5            // 696
 )
 
 // WriteState — 현재 제어 상태를 dst에 쓴다. len(dst) < StateSize이면 0을 돌려주고 아무것도 쓰지 않는다.
@@ -60,6 +72,15 @@ func (e *Engine) WriteState(dst []byte) int {
 	dst[offSlots] = e.slot[0]
 	dst[offSlots+1] = e.slot[1]
 	dst[offMute] = e.mute
+	dst[offKey] = e.pendingKey
+	dst[offMode] = e.mode[0] | e.dir[0]<<2
+	dst[offMode+1] = e.mode[1] | e.dir[1]<<2
+	if e.playing {
+		dst[offPlaying] = 1
+	}
+	for b := 0; b < ChordBars; b++ {
+		dst[offChord+b] = e.chordDeg[b] | e.chordFlags[b]<<3
+	}
 	return StateSize
 }
 
@@ -100,5 +121,24 @@ func (e *Engine) ReadState(src []byte) bool {
 	e.slot[1] = src[offSlots+1] & (PatternSlots - 1)
 	e.pendingSlot[0], e.pendingSlot[1] = e.slot[0], e.slot[1]
 	e.mute = src[offMute]
+	e.keyRoot = src[offKey] % NumKeys
+	e.pendingKey = e.keyRoot
+	for p := 0; p < 2; p++ {
+		m := src[offMode+p] & 3
+		d := src[offMode+p] >> 2 & 3
+		if m >= NumModes {
+			m = ModeBass
+		}
+		if d >= NumDirs {
+			d = DirUp
+		}
+		e.mode[p], e.dir[p] = m, d
+		e.arpIdx[p], e.arpDown[p] = 0, false
+	}
+	e.playing = src[offPlaying] != 0
+	for b := 0; b < ChordBars; b++ {
+		e.chordDeg[b] = src[offChord+b] & 7 % NumDegrees
+		e.chordFlags[b] = src[offChord+b] >> 3 & ChordSeventh
+	}
 	return true
 }

@@ -99,6 +99,8 @@ type Resident struct {
 
 	locked [engine.NumParams]bool // MANUAL 잠금
 
+	harmonyLocked bool // 사람이 코드·모드·키를 편집했다 — 세션 내 영구(Resume()로 풀리지 않는다, §12.2)
+
 	cur [engine.NumParams]float32 // 레지던트가 아는 현재 노브값(엔진 기본값에서 출발)
 	tgt [engine.NumParams]float32 // 이 바의 목표(바 경계에 갱신)
 
@@ -272,10 +274,17 @@ func (r *Resident) Locked(id engine.ParamID) bool {
 	return id < engine.NumParams && r.locked[id]
 }
 
-// Resume — 전체 잠금 해제. 포모도로 경계에서도 자동으로 호출된다.
+// Resume — 노브 잠금 전체 해제(harmonyLocked는 건드리지 않는다). 포모도로 경계·30초 무접촉에서도 호출된다.
 func (r *Resident) Resume() {
 	r.locked = [engine.NumParams]bool{}
 }
+
+// LockHarmony — 사람이 SetChord/BassMode/SetKey를 보냈다. 이후 레지던트는 화성 명령(SetKey·SetChord·BassMode)을
+// 내지 않는다(패턴·노브는 계속). 세션 내 영구 — 코드 선택은 노브와 달리 작곡이라 자동 복귀하지 않는다(§12.2).
+func (r *Resident) LockHarmony() { r.harmonyLocked = true }
+
+// HarmonyLocked — LockHarmony 이후 true.
+func (r *Resident) HarmonyLocked() bool { return r.harmonyLocked }
 
 // SetVibe — 바이브 변경. Tempo는 다음 바 경계에 SetParam 1개, 대역·드럼 밀도도
 // 다음 바 재계산부터 반영. 범위 밖 값은 무시한다(오용 방어).

@@ -42,6 +42,17 @@ type Engine struct {
 	samplesPerStep float64
 	started        bool // 첫 스텝 트리거 전(Render 첫 호출에서 스텝 0 발동)
 
+	// 조성·코드 트랙·모드·트랜스포트(harmony.go 계약, §12)
+	keyRoot    uint8            // 현재 키 루트(바 경계에 pendingKey에서 갱신)
+	pendingKey uint8            // SetKey 대기값
+	chordDeg   [ChordBars]uint8 // 마디별 코드 도수(0..6)
+	chordFlags [ChordBars]uint8 // 마디별 ChordSeventh
+	mode       [2]uint8         // 파트별 ModeBass/ModeArp/ModeChord
+	dir        [2]uint8         // 파트별 아르페지오 방향
+	arpIdx     [2]uint8         // 아르페지오 진행 인덱스(코드 톤 수로 순환)
+	arpDown    [2]bool          // DirUpDown 현재 하강 중
+	playing    bool             // Transport: false면 위치 동결(렌더는 계속 — 딜레이 꼬리)
+
 	// 드롭
 	dropPending bool
 	dropEnv     float32 // 1→0, 8바 선형
@@ -76,6 +87,10 @@ func (e *Engine) Reset(seed uint32) {
 	e.bass[1].init(seed ^ 0x7F4A7C15)
 	e.drums.init(seed ^ 0x3C6EF372)
 	e.fx.init()
+	e.playing = true
+	e.keyRoot = uint8(seed % NumKeys) // 세션 조성은 시드가 고른다(resident도 같은 식 seed%12로 SetKey를 낸다)
+	e.pendingKey = e.keyRoot
+	e.chordDeg = [ChordBars]uint8{0, 0, 5, 6, 0, 0, 3, 4} // i i VI VII | i i iv v
 	e.genInitialPatterns()
 	d := DefaultParams()
 	for i := 0; i < int(NumParams); i++ {
@@ -220,15 +235,72 @@ func (e *Engine) Apply(c Cmd) {
 		e.dropPending = true
 	case ResetPos:
 		e.stepIdx, e.bar, e.stepPos, e.started = 0, 0, 0, false
+	case SetKey:
+		e.pendingKey = c.A % NumKeys
+	case SetChord:
+		e.chordDeg[c.A%ChordBars] = c.B % NumDegrees
+		e.chordFlags[c.A%ChordBars] = c.C & ChordSeventh
+	case BassMode:
+		if c.A > 1 {
+			return
+		}
+		m, d := c.B, c.C
+		if m >= NumModes {
+			m = ModeBass
+		}
+		if d >= NumDirs {
+			d = DirUp
+		}
+		if m != e.mode[c.A] {
+			e.arpIdx[c.A], e.arpDown[c.A] = 0, false
+		}
+		e.mode[c.A], e.dir[c.A] = m, d
+	case Transport:
+		if c.A != 0 {
+			if !e.playing {
+				e.playing = true
+				e.stepIdx, e.stepPos, e.started = 0, 0, false // 다음 Render에서 스텝 0부터(바 유지)
+			}
+		} else if e.playing {
+			e.playing = false
+			e.bass[0].noteOff()
+			e.bass[1].noteOff()
+		}
 	}
 }
 
+// 조성·코드·모드·트랜스포트 읽기(UI 표시용).
+func (e *Engine) KeyRoot() uint8 { return e.pendingKey }
+
+// SyncPending — 바 경계에 적용되는 대기값(슬롯·키)을 렌더 없이 즉시 반영한다. 호스트의 메인 스레드
+// 섀도 엔진(렌더하지 않고 같은 Cmd만 적용해 UI 미러로 쓰는 인스턴스)이 바 경계 틱마다 부른다.
+// 실제 렌더 엔진은 onStep(0)에서 같은 일을 하므로 두 인스턴스의 제어 상태가 일치한다.
+func (e *Engine) SyncPending() {
+	e.slot = e.pendingSlot
+	e.keyRoot = e.pendingKey
+}
+func (e *Engine) Playing() bool { return e.playing }
+
+// Chord — 코드 트랙 마디 bar(&7)의 (도수, 플래그).
+func (e *Engine) Chord(bar int) (deg, flags uint8) {
+	b := bar & (ChordBars - 1)
+	return e.chordDeg[b], e.chordFlags[b]
+}
+
+// Mode — 파트의 (모드, 방향). 베이스 파트가 아니면 0,0.
+func (e *Engine) Mode(p Part) (mode, dir uint8) {
+	if p > BassB {
+		return 0, 0
+	}
+	return e.mode[p], e.dir[p]
+}
+
 // 위치·신호 읽기(Render 뒤).
-func (e *Engine) Block() uint64  { return e.block }
-func (e *Engine) Step() int      { return e.stepIdx }
-func (e *Engine) Bar() uint32    { return e.bar }
-func (e *Engine) Flags() uint32  { return e.flags }
-func (e *Engine) Peak() float32  { return e.peak }
+func (e *Engine) Block() uint64 { return e.block }
+func (e *Engine) Step() int     { return e.stepIdx }
+func (e *Engine) Bar() uint32   { return e.bar }
+func (e *Engine) Flags() uint32 { return e.flags }
+func (e *Engine) Peak() float32 { return e.peak }
 func (e *Engine) Slot(p Part) uint8 {
 	if p > BassB {
 		return 0
@@ -263,17 +335,19 @@ func (e *Engine) Render(out []float32) {
 	e.flags = 0 // 블록 신호는 Render가 소유한다(Trigger 명령의 비트는 그 블록 렌더 전에 세워지므로 유지되지 않는다 — 호스트가 패드 lit을 직접 그린다)
 	peak := float32(0)
 	for i := 0; i < Block; i++ {
-		if !e.started {
-			e.started = true
-			e.stepPos = 0
-			e.stepIdx = 0
-			e.onStep(0, true)
-		} else if e.stepPos >= e.samplesPerStep {
-			e.stepPos -= e.samplesPerStep
-			e.stepIdx = (e.stepIdx + 1) & (Steps - 1)
-			e.onStep(e.stepIdx, false)
+		if e.playing { // 정지 중에는 위치가 동결되고 보이스·FX 꼬리만 렌더된다
+			if !e.started {
+				e.started = true
+				e.stepPos = 0
+				e.stepIdx = 0
+				e.onStep(0, true)
+			} else if e.stepPos >= e.samplesPerStep {
+				e.stepPos -= e.samplesPerStep
+				e.stepIdx = (e.stepIdx + 1) & (Steps - 1)
+				e.onStep(e.stepIdx, false)
+			}
+			e.stepPos++
 		}
-		e.stepPos++
 		if e.dropEnv > 0 {
 			e.dropEnv -= e.dropDec
 			if e.dropEnv < 0 {
@@ -302,6 +376,7 @@ func (e *Engine) onStep(st int, first bool) {
 		}
 		e.flags |= FlagBar
 		e.slot = e.pendingSlot
+		e.keyRoot = e.pendingKey
 		if e.dropPending {
 			e.dropPending = false
 			e.dropEnv = 1

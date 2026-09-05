@@ -26,6 +26,10 @@ type DeviceLayout struct {
 	Display struct {
 		Rect Rect `json:"rect"`
 	} `json:"display"`
+	// ChordTrack — 코드 트랙 띠(8마디 셀, 앱이 그린다; §12). 헤더 아래 어두운 빈 판(실측 std ≈ 7~12).
+	ChordTrack struct {
+		Rect Rect `json:"rect"`
+	} `json:"chord_track"`
 	Sprites map[string]Sprite `json:"sprites"`
 }
 

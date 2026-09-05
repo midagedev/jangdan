@@ -56,6 +56,10 @@ func (f *fakeBridge) BassStep(p engine.Part, step int) (uint8, uint8) {
 func (f *fakeBridge) DrumStep(p engine.Part, step int) uint8 { return f.drum[p-2][step] }
 func (f *fakeBridge) Muted(p engine.Part) bool               { return f.muted[p] }
 func (f *fakeBridge) Slot(p engine.Part) uint8               { return f.slot[p] }
+func (f *fakeBridge) KeyRoot() int                           { return 0 }
+func (f *fakeBridge) Chord(bar int) (uint8, uint8)           { return 0, 0 }
+func (f *fakeBridge) Mode(p engine.Part) (uint8, uint8)      { return 0, 0 }
+func (f *fakeBridge) Hint(int)                               {}
 
 func (f *fakeBridge) Cmd(c engine.Cmd, a core.Author) {
 	f.cmds = append(f.cmds, recCmd{c, f.now, a})

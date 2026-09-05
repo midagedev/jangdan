@@ -27,6 +27,10 @@ func (f *fakeBridge) BassStep(p engine.Part, s int) (uint8, uint8) { return 0, 0
 func (f *fakeBridge) DrumStep(p engine.Part, s int) uint8          { return 0 }
 func (f *fakeBridge) Muted(p engine.Part) bool                     { return false }
 func (f *fakeBridge) Slot(p engine.Part) uint8                     { return 0 }
+func (f *fakeBridge) KeyRoot() int                                 { return 0 }
+func (f *fakeBridge) Chord(bar int) (uint8, uint8)                 { return 0, 0 }
+func (f *fakeBridge) Mode(p engine.Part) (uint8, uint8)            { return 0, 0 }
+func (f *fakeBridge) Hint(int)                                     {}
 func (f *fakeBridge) Telemetry(ev string, v float64)               {}
 func (f *fakeBridge) Replay(sec float64)                           {}
 func (f *fakeBridge) SeedWord() string                             { return "" }

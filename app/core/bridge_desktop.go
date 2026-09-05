@@ -18,6 +18,10 @@ func (nopBridge) BassStep(engine.Part, int) (uint8, uint8) { return 0, 0 }
 func (nopBridge) DrumStep(engine.Part, int) uint8          { return 0 }
 func (nopBridge) Muted(engine.Part) bool                   { return false }
 func (nopBridge) Slot(engine.Part) uint8                   { return 0 }
+func (nopBridge) KeyRoot() int                             { return 0 }
+func (nopBridge) Chord(int) (uint8, uint8)                 { return 0, 0 }
+func (nopBridge) Mode(engine.Part) (uint8, uint8)          { return 0, 0 }
+func (nopBridge) Hint(int)                                 {}
 func (nopBridge) Telemetry(string, float64)                {}
 func (nopBridge) Replay(float64)                           {}
 func (nopBridge) SeedWord() string                         { return "" }

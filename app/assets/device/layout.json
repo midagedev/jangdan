@@ -949,6 +949,14 @@
    48
   ]
  },
+ "chord_track": {
+  "rect": [
+   22,
+   103,
+   675,
+   27
+  ]
+ },
  "sprites": {
   "knob-r25.png": {
    "size": [

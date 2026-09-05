@@ -9,6 +9,8 @@
 //	jd.scope() → Uint8Array(1024) | null         파형 256 Float32 뷰
 //	jd.param(id) → number                        호스트 미러 값(0..1)
 //	jd.bassStep(part,step) → note | flags<<8     jd.drumStep(part,step) → flags   jd.muted(part) → 0|1   jd.slot(part) → n
+//	jd.keyRoot() → 0..11   jd.chord(bar) → deg | flags<<8   jd.mode(part) → mode | dir<<8   jd.hint(state)   (Phase 2 §12)
+//	tick에 playing(bool) 추가
 //	jd.telemetry(event, value)                   jd.replay(seconds)   jd.seedWord() → string
 //	jd.reducedMotion() → bool   jd.hidden() → bool   jd.wallClock() → [h,m,s]
 //	jd.frame(ms)  jd.firstFrame()  jd.allocPerFrame(bytes)   계측
@@ -53,8 +55,23 @@ func (j *jsBridge) Tick() Tick {
 		Flags:   uint32(intOf(t.Get("flags"))),
 		Peak:    float32(floatOf(t.Get("peak"))),
 		CtxTime: floatOf(t.Get("ctxTime")),
+		Playing: t.Get("playing").Truthy(),
 	}
 }
+
+func (j *jsBridge) KeyRoot() int { return intOf(j.b.Call("keyRoot")) }
+
+func (j *jsBridge) Chord(bar int) (uint8, uint8) {
+	v := intOf(j.b.Call("chord", bar))
+	return uint8(v & 0xFF), uint8(v >> 8)
+}
+
+func (j *jsBridge) Mode(p engine.Part) (uint8, uint8) {
+	v := intOf(j.b.Call("mode", int(p)))
+	return uint8(v & 0xFF), uint8(v >> 8)
+}
+
+func (j *jsBridge) Hint(state int) { j.b.Call("hint", state) }
 
 func (j *jsBridge) Scope(dst []byte) bool {
 	arr := j.b.Call("scope")
@@ -139,6 +156,10 @@ func (nopBridge) BassStep(engine.Part, int) (uint8, uint8) { return 0, 0 }
 func (nopBridge) DrumStep(engine.Part, int) uint8          { return 0 }
 func (nopBridge) Muted(engine.Part) bool                   { return false }
 func (nopBridge) Slot(engine.Part) uint8                   { return 0 }
+func (nopBridge) KeyRoot() int                             { return 0 }
+func (nopBridge) Chord(int) (uint8, uint8)                 { return 0, 0 }
+func (nopBridge) Mode(engine.Part) (uint8, uint8)          { return 0, 0 }
+func (nopBridge) Hint(int)                                 {}
 func (nopBridge) Telemetry(string, float64)                {}
 func (nopBridge) Replay(float64)                           {}
 func (nopBridge) SeedWord() string                         { return "" }

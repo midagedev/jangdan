@@ -35,6 +35,7 @@ type Tick struct {
 	Flags   uint32 // engine.Flag*, 직전 틱 이후 누적 OR
 	Peak    float32
 	CtxTime float64 // AudioContext.currentTime(초)
+	Playing bool    // 트랜스포트(engine.Playing) — Started 전에는 false
 }
 
 // Bridge — JS 호스트(app/web/host.js)와의 접점. 데스크톱 빌드는 no-op 구현.
@@ -49,6 +50,10 @@ type Bridge interface {
 	DrumStep(p engine.Part, step int) uint8
 	Muted(p engine.Part) bool
 	Slot(p engine.Part) uint8
+	KeyRoot() int                          // 조성 루트 0..11(0 = C)
+	Chord(bar int) (deg, flags uint8)      // 코드 트랙 마디 bar&7의 (도수 0..6, engine.ChordSeventh)
+	Mode(p engine.Part) (mode, dir uint8)  // 베이스 파트 모드(engine.ModeBass/Arp/Chord)·방향
+	Hint(state int)                        // 첫 접촉 캡션 상태(호스트 DOM이 문구를 가진다): 0 없음 1 탭 전 2 기기 안내 3 기기 뷰 첫 진입
 	Telemetry(event string, value float64) // 이벤트 1건(호스트가 배치 전송)
 	Replay(seconds float64)                // 마지막 N초 리플레이 요청(3·2·1 뒤 재생; 호스트가 처리)
 	SeedWord() string                      // DOM 오버레이의 시드 단어(빈 문자열 가능)
