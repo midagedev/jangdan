@@ -1,0 +1,1 @@
+{ "name": "jangdan-cf", "private": true, "devDependencies": { "wrangler": "^4" } }
