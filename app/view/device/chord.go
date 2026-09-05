@@ -22,9 +22,10 @@ import (
 
 // 수치 계약(스펙 P2-device origin).
 const (
-	chordGap       = 3.0 // 셀 간 간격(px)
-	chordSelTout   = 6.0 // 선택기 무조작 닫힘(초)
-	dispKnobValDur = 2.0 // B 표시창: 노브 접촉 뒤 값 표시 지속(초)
+	chordGap        = 3.0  // 셀 간 간격(px)
+	chordSelTout    = 6.0  // 선택기 무조작 닫힘(초)
+	dispKnobValDur  = 2.0  // B 표시창: 노브 접촉 뒤 값 표시 지속(초)
+	chordLabelScale = 0.62 // 코드 트랙 라벨 스케일(버튼 0.45보다 크게 — 비전 FIX 2026-09-06: 10px 로마 숫자는 코드 줄로 안 읽힘)
 )
 
 // 도수 로마 숫자 표기(0..6 — 자연 마이너의 1·2·4·5도는 소문자, 3·6·7도는 대문자).

@@ -111,6 +111,11 @@ func (v *View) ensureLayers(ctx *core.Ctx) {
 			col = colInk // 스텝 숫자는 (앱이 그린) 주황 면 위 — 어두운 잉크
 		}
 		sc := labelScale(f, b.label, labelBtnScale, b.rect[2]-labelFitPad)
+		if b.kind == bkPlay || b.kind == bkRec {
+			// 패널 그림의 트랜스포트 아이콘(가로 막대·삼각)이 버튼 중앙에 칠해져 있어 라벨과
+			// 겹친다(비전 FIX 2026-09-06) — 라벨을 아이콘 아래로 내린다.
+			cy += labelTransportDy
+		}
 		f.Draw(v.labelLayer, b.label, cx, cy, sc, col, core.AlignCenter)
 	}
 	for i := range v.pads {
@@ -328,21 +333,21 @@ func (v *View) drawChordTrack(screen *ebiten.Image, ctx *core.Ctx) {
 		v.fillRectA(screen, v.chordCells[deg], colChordSel)
 		for i := 0; i < engine.NumDegrees; i++ {
 			cx, cy := v.chordCells[i].Center()
-			f.Draw(screen, romanDeg[i], cx, cy, labelBtnScale, colLabel, core.AlignCenter)
+			f.Draw(screen, romanDeg[i], cx, cy, chordLabelScale, colLabel, core.AlignCenter)
 		}
 		c7 := v.chordCells[engine.ChordBars-1]
 		if flags&engine.ChordSeventh != 0 {
 			v.fillRectA(screen, c7, colChordSel)
 		}
 		cx, cy := c7.Center()
-		f.Draw(screen, v.chord.barLbl, cx, cy, labelBtnScale, colLabel, core.AlignCenter)
+		f.Draw(screen, v.chord.barLbl, cx, cy, labelScale(f, v.chord.barLbl, chordLabelScale, c7[2]-labelFitPad), colLabel, core.AlignCenter)
 		return
 	}
 	cur := int(ctx.Tick.Bar) & int(engine.ChordBars-1)
 	v.fillRectA(screen, v.chordCells[cur], colLEDMid)
 	for i := range v.chordCells {
 		cx, cy := v.chordCells[i].Center()
-		f.Draw(screen, v.chord.cells[i].text, cx, cy, labelBtnScale, colLabel, core.AlignCenter)
+		f.Draw(screen, v.chord.cells[i].text, cx, cy, labelScale(f, v.chord.cells[i].text, chordLabelScale, v.chordCells[i][2]-labelFitPad), colLabel, core.AlignCenter)
 	}
 }
 

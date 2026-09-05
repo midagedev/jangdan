@@ -2,7 +2,7 @@
 // (논리 좌표 = CSS px, 레이아웃 JSON 좌표로 바로 탭한다). 서버는 app/serve.mjs(8444) 재사용/구동.
 //   node tools/capture.mjs --out <dir> [--browser chromium]
 // 산출: room-hint.png(탭 전) room-live.png(탭 후 4초) room-live2.png(12초) device.png(기기 탭 후)
-//       device-knob.png(CUTOFF A 드래그 후) + MANIFEST.json(커밋 해시·시각·UA)
+//       device-knob.png(CUTOFF A 드래그 후) · device-chord.png(코드 셀 탭 → 선택기) + MANIFEST.json(커밋 해시·시각·UA)
 import fs from 'node:fs';
 import path from 'node:path';
 import https from 'node:https';
@@ -71,6 +71,13 @@ for (let i = 1; i <= 12; i++) { await page.mouse.move(k.cx, k.cy - i * 10); awai
 await page.mouse.up();
 await page.waitForTimeout(600);
 await shot('device-knob.png');
+// 코드 트랙 셀 2(마디 3) 탭 → 선택기 열림(비전 판정 항목 6 — 첫 캡처 세트에 빠져 있었다)
+if (dev.chord_track && dev.chord_track.rect) {
+  const [cx0, cy0, cw, ch] = dev.chord_track.rect;
+  await page.mouse.click(cx0 + cw * (2.5 / 8), cy0 + ch / 2);
+  await page.waitForTimeout(500);
+  await shot('device-chord.png');
+}
 const stats = await page.evaluate(() => window.__jdStats());
 const commit = execSync('git rev-parse --short HEAD', { cwd: root }).toString().trim();
 fs.writeFileSync(path.join(out, 'MANIFEST.json'), JSON.stringify({ commit, at: new Date().toISOString(), browser: browserName, viewport: '720x1280@1', ua: stats.ua, firstSoundMs: stats.firstSoundMs, frameMsP95: stats.frameMsP95, cmdsSent: stats.cmdsSent, errors, logs: logs.slice(-80) }, null, 1));

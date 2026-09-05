@@ -33,15 +33,18 @@ const (
 
 	scopeSamps = 256 // Bridge.Scope 파형 샘플 수
 	scopeSegs  = scopeSamps - 1
-	scopeHalfW = 0.5 // 폴리라인 굵기 1px → 반폭
+	scopeHalfW = 1.0 // 폴리라인 굵기 2px → 반폭(비전 처방 2026-09-06: 1px 선은 정지컷에서 재생 신호로 안 읽힘)
 
-	seedScale      = 0.7 // 시드 단어
+	seedScale         = 0.7  // 시드 단어
 	hintRingInset     = 12.0 // 시작 전 링: 기기 rect를 밖으로 부풀리는 폭(px)
 	hintRingStroke    = 3.0  // 시작 전 링 외곽선 굵기
-	hintStrokePx      = 2.0  // 시작 후 기기 외곽 힌트 굵기
+	hintStrokePx      = 4.0  // 시작 후 기기 외곽 힌트 굵기(2→4, 비전 처방 2026-09-06: 2px는 회백 실선으로 묻힘)
+	hintPulseHz       = 0.7  // 힌트 알파 펄스 주파수(1→0.7)
+	hintAlphaMin      = 0.7  // 힌트 알파 하한(0.5→0.7) — 상한 1.0
 	hintAfterStartSec = 20.0 // 시작 후 이 시간까지 기기 외곽 힌트(첫 기기 탭 전까지)
 	plateDimPreStart  = 0.85 // 시작 전 플레이트 감쇠(ColorScale 배)
 	ledInsetPx        = 4.0  // device rect 하단 안쪽(자동 배치 때)
+	ledLitGrow        = 1.0  // 활성 스텝 LED 반지름 가산(r3→4, 지름 6→8 — 비전 처방 2026-09-06)
 
 	gatePollFrames = 4  // CH/OH 게이트 폴 주기(프레임)
 	seedPollFrames = 60 // 시드 단어 폴 주기(1초)
@@ -332,12 +335,12 @@ type View struct {
 	ledLit             []*ebiten.Image
 	ledLitX, ledLitY   []float64
 
-	ringImg       *ebiten.Image
-	ringX, ringY  float64
-	ringRect      [4]float64 // 링 경로 rect(화면 좌표) — 픽셀 판독이 게임 루프 밖에서 불가해 단위 테스트가 직접 잰다
-	hintImg       *ebiten.Image
-	seedImg       *ebiten.Image
-	seedStr       string
+	ringImg      *ebiten.Image
+	ringX, ringY float64
+	ringRect     [4]float64 // 링 경로 rect(화면 좌표) — 픽셀 판독이 게임 루프 밖에서 불가해 단위 테스트가 직접 잰다
+	hintImg      *ebiten.Image
+	seedImg      *ebiten.Image
+	seedStr      string
 
 	st     state
 	tapped bool // 이 프레임 DeviceTapped 값(Update에서 계산)
@@ -508,9 +511,10 @@ func (v *View) buildLEDs() {
 	v.ledLitX = make([]float64, len(leds))
 	v.ledLitY = make([]float64, len(leds))
 	for i, led := range leds {
-		w, h := int(2*led.R+3), int(2*led.R+3)
+		rl := led.R + ledLitGrow
+		w, h := int(2*rl+3), int(2*rl+3)
 		img := newOffscreen(w, h)
-		vector.FillCircle(img, float32(w/2), float32(h/2), float32(led.R), colLED, true)
+		vector.FillCircle(img, float32(w/2), float32(h/2), float32(rl), colLED, true)
 		v.ledLit[i] = img
 		v.ledLitX[i] = led.CX - float64(w)/2
 		v.ledLitY[i] = led.CY - float64(h)/2
@@ -781,7 +785,9 @@ func (v *View) Draw(screen *ebiten.Image, ctx *core.Ctx) {
 // (구 규칙은 15~60초 무접촉 창 + everTouched라 시작 직후엔 힌트가 없었다).
 func (v *View) drawHints(dst *ebiten.Image, tr, tg, tb float32) {
 	s := &v.st
-	a := float32(0.75 + 0.25*math.Sin(2*math.Pi*s.t)) // 1Hz 0.5..1.0
+	// hintAlphaMin..1.0, hintPulseHz(0.7Hz) — 탭 후 링이 흐려 표적을 못 찾는다는 비전 FIX(2026-09-06).
+	mid := (1 + hintAlphaMin) / 2
+	a := float32(mid + (1-mid)*math.Sin(2*math.Pi*hintPulseHz*s.t))
 	if s.hintRing && v.ringImg != nil {
 		v.blit(dst, v.ringImg, v.ringX, v.ringY, tr, tg, tb, a)
 		return

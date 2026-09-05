@@ -27,28 +27,29 @@ import (
 
 // 수치 계약(스펙 origin). 픽셀 좌표는 여기에 없다 — 레이아웃 JSON이 소유한다.
 const (
-	hitKnobPad    = 6     // 노브 히트 여유(px, 중심 거리 r+6)
-	hitRectPad    = 4     // rect 컨트롤 히트 여유(px)
-	dragRange     = 200.0 // 노브 세로 드래그: 200px = Δ1.0
-	tapMoveMax    = 6.0   // 탭 판정 최대 이동(px)
-	tapDurMax     = 0.25  // 탭 판정 최대 눌림(초)
-	padHoldMute   = 0.5   // 패드 길게 누르기 뮤트 임계(초)
-	padLitDur     = 0.12  // 패드 탭 lit(초)
-	sweepSendMin  = 0.05  // 스윕 중 SetParam 최소 송신 간격(초)
-	knobLitBoost  = 1.12  // 잡힌 노브 밝기 배수
-	padMuteScale  = 0.55  // 뮤트 패드 ColorScale(오버레이 알파 0.45로 환원)
-	dropPulseAmp  = 0.35  // Build 중 DROP 버튼 펄스 진폭(+0..35%)
-	dropPulseHz   = 1.0   // 펄스 주파수
-	overlayLitA   = 0.18  // lit 반투명 흰 사각 알파
-	knobDyMain    = 18    // 노브 라벨 오프셋: cy + r + 18(베이스라인·fx — 눈금 겹침에서 +14px)
-	knobDyDrums   = 14    // 드럼 노브 라벨 오프셋(라벨판이 좁아 +10px)
-	plateInset    = 8     // 섹션 이름판 왼쪽 정렬 들여쓰기(px) — 판 테두리가 rect 안쪽 ≈6px에 있어 6이면 첫 글자가 테두리에 걸린다(2차 비전 처방)
-	titleShiftX   = 40    // JANGDAN x 이동(좌상단 DOM 시드 입력 회피)
-	labelFitPad   = 4     // 버튼 라벨 폭 예산 = rect 폭 − 4
-	labelFloor    = 0.3   // 라벨 축소 하한
-	plateBandW    = 6     // 이름판 좌측 밴드 폭(px) — 게이트 2의 검사 밴드와 같은 폭. 페인팅 잔글자를 판색으로 덮는다
-	stepFaceInset = 2     // 스텝 버튼 면 들여쓰기(px, rect 안쪽) — 면은 앱이 그린다(16번 자리가 스크럽으로 지워짐)
-	botDispPad    = 8     // 하단 표시창 라벨 폭 예산 = rect 폭 − 8(베이스 표시창·버튼은 −4 — §12.3)
+	hitKnobPad       = 6     // 노브 히트 여유(px, 중심 거리 r+6)
+	hitRectPad       = 4     // rect 컨트롤 히트 여유(px)
+	dragRange        = 200.0 // 노브 세로 드래그: 200px = Δ1.0
+	tapMoveMax       = 6.0   // 탭 판정 최대 이동(px)
+	tapDurMax        = 0.25  // 탭 판정 최대 눌림(초)
+	padHoldMute      = 0.5   // 패드 길게 누르기 뮤트 임계(초)
+	padLitDur        = 0.12  // 패드 탭 lit(초)
+	sweepSendMin     = 0.05  // 스윕 중 SetParam 최소 송신 간격(초)
+	knobLitBoost     = 1.12  // 잡힌 노브 밝기 배수
+	padMuteScale     = 0.55  // 뮤트 패드 ColorScale(오버레이 알파 0.45로 환원)
+	dropPulseAmp     = 0.35  // Build 중 DROP 버튼 펄스 진폭(+0..35%)
+	dropPulseHz      = 1.0   // 펄스 주파수
+	overlayLitA      = 0.18  // lit 반투명 흰 사각 알파
+	knobDyMain       = 18    // 노브 라벨 오프셋: cy + r + 18(베이스라인·fx — 눈금 겹침에서 +14px)
+	knobDyDrums      = 14    // 드럼 노브 라벨 오프셋(라벨판이 좁아 +10px)
+	plateInset       = 8     // 섹션 이름판 왼쪽 정렬 들여쓰기(px) — 판 테두리가 rect 안쪽 ≈6px에 있어 6이면 첫 글자가 테두리에 걸린다(2차 비전 처방)
+	titleShiftX      = 40    // JANGDAN x 이동(좌상단 DOM 시드 입력 회피)
+	labelFitPad      = 4     // 버튼 라벨 폭 예산 = rect 폭 − 4
+	labelTransportDy = 13.0  // PLAY/DROP 라벨을 아이콘 아래로(버튼 높이 48의 하단 1/4 중심)
+	labelFloor       = 0.3   // 라벨 축소 하한
+	plateBandW       = 6     // 이름판 좌측 밴드 폭(px) — 게이트 2의 검사 밴드와 같은 폭. 페인팅 잔글자를 판색으로 덮는다
+	stepFaceInset    = 2     // 스텝 버튼 면 들여쓰기(px, rect 안쪽) — 면은 앱이 그린다(16번 자리가 스크럽으로 지워짐)
+	botDispPad       = 8     // 하단 표시창 라벨 폭 예산 = rect 폭 − 8(베이스 표시창·버튼은 −4 — §12.3)
 )
 
 // 색 계약(스펙 hex 그대로).
@@ -143,12 +144,12 @@ type bassDisp struct {
 
 // bottomDisp — 하단 표시창 캐시(키·BPM·마디·페이즈 — "Am 120 B3 BUILD").
 type bottomDisp struct {
-	key       int32
-	bpm, bar  int32
-	phase     uint8
-	manual    bool
-	text      string
-	dirty     bool
+	key      int32
+	bpm, bar int32
+	phase    uint8
+	manual   bool
+	text     string
+	dirty    bool
 }
 
 // View — 기기 뷰. New(이미지 있는 제품 경로)과 newView(레이아웃만 — 테스트)로 만든다.
@@ -177,7 +178,7 @@ type View struct {
 	scopeRect core.Rect
 	botRect   core.Rect
 
-	chordRect  core.Rect              // 코드 트랙 띠(§12.3)
+	chordRect  core.Rect // 코드 트랙 띠(§12.3)
 	chordCells [engine.ChordBars]core.Rect
 	chord      chordState
 	harmonyOK  bool // 화성 API 래치(chord.go 헤더) — 구 호스트 패닉 1회에 끊긴다
@@ -633,6 +634,14 @@ func (v *View) cacheDisplays(ctx *core.Ctx) {
 				d.text = string(b) // 재구성 = 할당 — 값 변화 시에만
 				d.dirty = true
 				d.modeKey = -1 // 값 표시 중임을 표시 — 2초 뒤 모드 경로가 재구성을 놓치지 않게
+				v.rebuilds++
+			}
+			continue
+		}
+		if s == 0 { // A는 모드가 BASS 고정 — 빈 창은 고장으로 읽힌다(비전 FIX 2026-09-06)
+			if d.text == "" {
+				d.text = bassModeName(engine.ModeBass, engine.DirUp)
+				d.dirty = true
 				v.rebuilds++
 			}
 			continue
