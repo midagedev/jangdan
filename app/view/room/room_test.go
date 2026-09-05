@@ -389,28 +389,33 @@ func stepPointer(t *testing.T, v *View, p core.Pointer) bool {
 
 func TestDeviceTapped(t *testing.T) {
 	v := newTestView(t)
+	// 좌표는 실제 layout.json의 device rect에서 유도한다(2026-09-05: 비전 라운드가 플레이스홀더 좌표를
+	// 실측값으로 바꾸자 하드코딩 380,905가 기기 밖이 되어 실패했다 — 좌표의 소유자는 JSON이다).
+	dcx, dcy := v.layout.Device.Center()
+	in := func(p core.Pointer) core.Pointer { p.X, p.Y = dcx, dcy; return p }
+	out := func(p core.Pointer) core.Pointer { p.X, p.Y = v.layout.Device[0]-40, dcy; return p } // rect 왼쪽 밖
 	// 케이스 1: 안에서 눌리고 안에서 떼어짐 → true, 다음 프레임 false
-	if stepPointer(t, v, core.Pointer{ID: 1, X: 380, Y: 905, JustPressed: true, Pressed: true}) {
+	if stepPointer(t, v, in(core.Pointer{ID: 1, JustPressed: true, Pressed: true})) {
 		t.Fatal("누르는 프레임에 true")
 	}
-	if !stepPointer(t, v, core.Pointer{ID: 1, X: 380, Y: 905, JustReleased: true}) {
+	if !stepPointer(t, v, in(core.Pointer{ID: 1, JustReleased: true})) {
 		t.Fatal("안에서 떼었는데 false")
 	}
-	if stepPointer(t, v, core.Pointer{ID: 1, X: 380, Y: 905}) {
+	if stepPointer(t, v, in(core.Pointer{ID: 1})) {
 		t.Fatal("다음 프레임에도 true — 1프레임 펄스 아님")
 	}
 
 	// 케이스 2: 안에서 눌리고 밖에서 떼어짐 → false
-	if stepPointer(t, v, core.Pointer{ID: 2, X: 380, Y: 905, JustPressed: true, Pressed: true}) {
+	if stepPointer(t, v, in(core.Pointer{ID: 2, JustPressed: true, Pressed: true})) {
 		t.Fatal("누르는 프레임에 true(2)")
 	}
-	if stepPointer(t, v, core.Pointer{ID: 2, X: 100, Y: 905, JustReleased: true}) {
+	if stepPointer(t, v, out(core.Pointer{ID: 2, JustReleased: true})) {
 		t.Fatal("밖에서 떼었는데 true")
 	}
 
 	// 케이스 3: 밖에서 눌리고 안에서 떼어짐 → false(무장 안 됨)
-	stepPointer(t, v, core.Pointer{ID: 3, X: 100, Y: 905, JustPressed: true, Pressed: true})
-	if stepPointer(t, v, core.Pointer{ID: 3, X: 380, Y: 905, JustReleased: true}) {
+	stepPointer(t, v, out(core.Pointer{ID: 3, JustPressed: true, Pressed: true}))
+	if stepPointer(t, v, in(core.Pointer{ID: 3, JustReleased: true})) {
 		t.Fatal("밖에서 눌러 안에서 떼었는데 true")
 	}
 }

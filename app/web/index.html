@@ -18,6 +18,12 @@
   }
   #seedbox { display: none; width: 140px; }
   #seedbox.show { display: block; }
+  /* 시드 단어 표시 — 캔버스 폰트는 ASCII라서 한글은 DOM이 담는다. */
+  #seedtext {
+    position: absolute; left: 0; right: 0; bottom: 40px; z-index: 10;
+    pointer-events: none; text-align: center;
+    font: 14px system-ui, sans-serif; color: rgba(232, 226, 210, 0.7);
+  }
 </style>
 </head>
 <body>
@@ -26,8 +32,9 @@
   <button id="seedtoggle">seed</button>
   <input id="seedbox" type="text" placeholder="seed word" autocomplete="off">
 </div>
+<div id="seedtext"></div>
 <script src="report-config.js"></script>
-<script src="bridge.js"></script>
+<script src="host.js"></script>
 <button id="sendreport" style="position:absolute;right:8px;bottom:8px;z-index:10;font:12px system-ui;padding:6px 10px;opacity:.85" onclick="window.jdSendReport().then(t=>this.textContent=t)">Send report</button>
 <script src="wasm_exec.js"></script>
 <script>
