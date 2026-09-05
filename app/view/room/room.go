@@ -321,9 +321,8 @@ type View struct {
 	st     state
 	tapped bool // 이 프레임 DeviceTapped 값(Update에서 계산)
 
-	// 프레임 재사용(할당 0)
+	// 프레임 재사용(할당 0). 셰이더 드로우 옵션은 shaderSet이 소유(Uniforms 생성 시 바인드).
 	op   ebiten.DrawImageOptions
-	shop ebiten.DrawRectShaderOptions
 	trop ebiten.DrawTrianglesOptions
 
 	scopeBuf [scopeSamps * 4]byte
@@ -637,9 +636,10 @@ func (v *View) Draw(screen *ebiten.Image, ctx *core.Ctx) {
 		u["Density"] = s.rainDensity
 		u["Thickness"] = s.rainThick
 		setColorUniform(v.sh.rainColor, v.pal.rain, tr, tg, tb, rainMaxAlpha)
-		v.shop.GeoM.Reset()
-		v.shop.GeoM.Translate(l.Skylight[0], l.Skylight[1])
-		screen.DrawRectShader(w, h, v.sh.rain, &v.shop)
+		op := &v.sh.rainShop
+		op.GeoM.Reset()
+		op.GeoM.Translate(l.Skylight[0], l.Skylight[1])
+		screen.DrawRectShader(w, h, v.sh.rain, op)
 	}
 
 	// 4) 벽 레코드(캐시 — Phase 교체 크로스페이드)
@@ -679,22 +679,26 @@ func (v *View) Draw(screen *ebiten.Image, ctx *core.Ctx) {
 	// 7) 스탠드 빛 베일과 먼지(콘 영역)
 	if w, h := rectSize(l.Lamp.Cone); w >= 1 && h >= 1 {
 		u := v.sh.lampU
-		v.sh.lampCenter[0] = float32(l.Lamp.Bulb[0] + s.lampShakeOff[0] - l.Lamp.Cone[0])
-		v.sh.lampCenter[1] = float32(l.Lamp.Bulb[1] + s.lampShakeOff[1] - l.Lamp.Cone[1])
+		v.sh.lampCenter[0] = float32(l.Lamp.Bulb[0] + s.lampShakeOff[0])
+		v.sh.lampCenter[1] = float32(l.Lamp.Bulb[1] + s.lampShakeOff[1])
 		u["Radius"] = float32(l.Lamp.Radius)
 		lampA := lerpF32(s.prevTod.lampAlpha(), s.tod.lampAlpha(), float32(s.todBlend))
 		u["Brightness"] = s.lampBrightness() * lampA
 		r, g, b := lampColorAt(v.pal.lampWarm, lampHot, s.lampQ)
 		setColorUniform(v.sh.lampColor, color.NRGBA{R: uint8(r * 255), G: uint8(g * 255), B: uint8(b * 255), A: 255}, tr, tg, tb, 1)
-		v.shop.GeoM.Reset()
-		v.shop.GeoM.Translate(l.Lamp.Cone[0], l.Lamp.Cone[1])
-		screen.DrawRectShader(w, h, v.sh.lamp, &v.shop)
+		op := &v.sh.lampShop
+		op.GeoM.Reset()
+		op.GeoM.Translate(l.Lamp.Cone[0], l.Lamp.Cone[1])
+		screen.DrawRectShader(w, h, v.sh.lamp, op)
 
 		v.sh.dustU["Time"] = float32(s.t)
+		v.sh.dustSize[0] = float32(w)
+		v.sh.dustSize[1] = float32(h)
 		setColorUniform(v.sh.dustColor, dustColor, tr, tg, tb, 1)
-		v.shop.GeoM.Reset()
-		v.shop.GeoM.Translate(l.Lamp.Cone[0], l.Lamp.Cone[1])
-		screen.DrawRectShader(w, h, v.sh.dust, &v.shop)
+		dop := &v.sh.dustShop
+		dop.GeoM.Reset()
+		dop.GeoM.Translate(l.Lamp.Cone[0], l.Lamp.Cone[1])
+		screen.DrawRectShader(w, h, v.sh.dust, dop)
 	}
 
 	// 8) 고양이·캐릭터(포즈 스프라이트가 없으면 플레이트 서브이미지 변형)
@@ -803,29 +807,50 @@ func (v *View) drawScope(dst *ebiten.Image, tr, tg, tb float32) {
 	dst.DrawTriangles(v.scopeV[:], v.scopeI[:], v.white, &v.trop)
 }
 
-// blit — 옵션 재사용 이미지 그리기.
+// blit — 옵션 재사용 이미지 그리기. ColorScale은 프리멀티 값에 적용되므로(v2.9 계약,
+// image.go "ColorM.Scale(r,g,b,a) == ColorScale.Scale(r·a, g·a, b·a, a)") 알파를 rgb에
+// 접어 넣는다 — 안 접으면 src가 투명해지지 않고 dst 위에 그대로 얹혀 순백으로 포화한다.
 func (v *View) blit(dst, src *ebiten.Image, x, y float64, tr, tg, tb, a float32) {
 	v.op.GeoM.Reset()
 	v.op.GeoM.Translate(x, y)
 	v.op.ColorScale.Reset()
-	v.op.ColorScale.Scale(tr, tg, tb, a)
+	v.op.ColorScale.Scale(tr*a, tg*a, tb*a, a)
 	dst.DrawImage(src, &v.op)
 	v.draws++
 }
 
-// fill — 흰 1×1을 확대한 채움 사각.
+// fill — 흰 1×1을 확대한 채움 사각. 알파 접기 계약은 blit과 같다.
 func (v *View) fill(dst *ebiten.Image, x, y, w, h float64, tr, tg, tb, a float32) {
 	v.op.GeoM.Reset()
 	v.op.GeoM.Scale(w, h)
 	v.op.GeoM.Translate(x, y)
 	v.op.ColorScale.Reset()
-	v.op.ColorScale.Scale(tr, tg, tb, a)
+	v.op.ColorScale.Scale(tr*a, tg*a, tb*a, a)
 	dst.DrawImage(v.white, &v.op)
 	v.draws++
 }
 
+// actorGeoM — 배우 변환(서브이미지·포즈 공용): rect 위치에 놓고 앵커 기준으로
+// 회전·스케일한 뒤 앵커+변위로 옮긴다. GeoM 호출 순서 = 점 적용 순서이므로
+// Translate(r−a) → Rotate → Scale → Translate(a+d)가 "앵커를 원점에 모아 변형"이다.
+func actorGeoM(g *ebiten.GeoM, poseSize [2]int, r core.Rect, anchor [2]float64,
+	dx, dy, ang, scale float64) {
+	if poseSize[0] > 0 && poseSize[1] > 0 { // 포즈 스프라이트를 rect에 맞춘다
+		g.Scale(r[2]/float64(poseSize[0]), r[3]/float64(poseSize[1]))
+	}
+	g.Translate(r[0]-anchor[0], r[1]-anchor[1])
+	if ang != 0 {
+		g.Rotate(ang)
+	}
+	if scale != 1 {
+		g.Scale(scale, scale)
+	}
+	g.Translate(anchor[0]+dx, anchor[1]+dy)
+}
+
 // drawActor — 플레이트 서브이미지(또는 포즈 스프라이트)를 앵커 기준 변형해 그린다.
-// 포즈가 없고 변환이 항등이면 그리지 않는다(플레이트에 이미 있다).
+// 포즈가 없고 변환이 항등이면 그리지 않는다(플레이트에 이미 있다). 서브이미지도
+// GeoM 원점(=rect 좌상단)에 배치해야 제자리에 그려진다 — 원점을 빼면 (0,0)에 복제된다.
 func (v *View) drawActor(dst, sub, pose *ebiten.Image, r core.Rect, anchor [2]float64,
 	dx, dy, ang, scale float64, tr, tg, tb float32) {
 	src := sub
@@ -838,22 +863,13 @@ func (v *View) drawActor(dst, sub, pose *ebiten.Image, r core.Rect, anchor [2]fl
 	if pose == nil && dx == 0 && dy == 0 && ang == 0 && scale == 1 {
 		return
 	}
-	v.op.GeoM.Reset()
-	if pose != nil { // 스프라이트를 rect에 맞춘다
+	var ps [2]int
+	if pose != nil {
 		w, h := pose.Size()
-		if w > 0 && h > 0 {
-			v.op.GeoM.Scale(r[2]/float64(w), r[3]/float64(h))
-			v.op.GeoM.Translate(r[0], r[1])
-		}
+		ps = [2]int{w, h}
 	}
-	v.op.GeoM.Translate(anchor[0]+dx, anchor[1]+dy)
-	if ang != 0 {
-		v.op.GeoM.Rotate(ang)
-	}
-	if scale != 1 {
-		v.op.GeoM.Scale(scale, scale)
-	}
-	v.op.GeoM.Translate(-anchor[0], -anchor[1])
+	v.op.GeoM.Reset()
+	actorGeoM(&v.op.GeoM, ps, r, anchor, dx, dy, ang, scale)
 	v.op.ColorScale.Reset()
 	v.op.ColorScale.Scale(tr, tg, tb, 1)
 	dst.DrawImage(src, &v.op)
@@ -884,8 +900,9 @@ func (v *View) rebuildWinCache() {
 		v.op.GeoM.Scale(r[2], r[3])
 		v.op.GeoM.Translate(r[0]-v.winX, r[1]-v.winY)
 		v.op.ColorScale.Reset()
-		v.op.ColorScale.Scale(float32(v.pal.windowLit.R)/255, float32(v.pal.windowLit.G)/255,
-			float32(v.pal.windowLit.B)/255, a)
+		// 알파 접기(blit 계약) — 캐시 텍스처에 프리멀 값으로 남아야 나중 blit이 옳다.
+		v.op.ColorScale.Scale(float32(v.pal.windowLit.R)/255*a, float32(v.pal.windowLit.G)/255*a,
+			float32(v.pal.windowLit.B)/255*a, a)
 		v.winImg.DrawImage(v.white, &v.op)
 	}
 }
@@ -930,7 +947,7 @@ func (v *View) rebuildRecCache() {
 		v.op.GeoM.Reset()
 		v.op.GeoM.Translate(dstR[0]-srcR[0], dstR[1]-srcR[1])
 		v.op.ColorScale.Reset()
-		v.op.ColorScale.Scale(1, 1, 1, a)
+		v.op.ColorScale.Scale(a, a, a, a) // 알파 접기 — 크로스페이드가 프리멀로 감쇠한다
 		v.recImg.DrawImage(src, &v.op)
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/hajimehoshi/ebiten/v2"
+
 	"github.com/midagedev/revirth/app/core"
 	"github.com/midagedev/revirth/engine"
 )
@@ -462,5 +464,86 @@ func TestShadersCompile(t *testing.T) {
 	}
 	if sh.rain == nil || sh.lamp == nil || sh.dust == nil {
 		t.Fatalf("셰이더 누락: rain=%v lamp=%v dust=%v", sh.rain, sh.lamp, sh.dust)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// 회귀 — 2026-09-06 방 뷰 결함 3종(원점 복제·순백 사각·비/스탠드/먼지 미표시)
+
+// TestActorGeoMPlacement — 결함 A(원점 복제): 서브이미지·포즈가 rect 제자리에 놓이고
+// 앵커 기준 변형이 되는지. 옛 코드는 GeoM에 rect 배치가 없어 플레이트 서브이미지를
+// (0,0)에 복제했다. 소스 좌표(서브이미지/포즈 안) → 화면 좌표 매핑만 단언한다.
+func TestActorGeoMPlacement(t *testing.T) {
+	r := core.Rect{100, 200, 50, 80}
+	anchor := [2]float64{120, 240} // rect 안의 앵커
+
+	// 항등: 소스 (0,0)→rect 좌상단, (w,h)→rect 우하단, 앵커 상당점→앵커.
+	var g ebiten.GeoM
+	actorGeoM(&g, [2]int{}, r, anchor, 0, 0, 0, 1)
+	for _, tc := range []struct{ sx, sy, wx, wy float64 }{
+		{0, 0, r[0], r[1]},
+		{r[2], r[3], r[0] + r[2], r[1] + r[3]},
+		{anchor[0] - r[0], anchor[1] - r[1], anchor[0], anchor[1]},
+	} {
+		gx, gy := g.Apply(tc.sx, tc.sy)
+		if math.Abs(gx-tc.wx) > 1e-9 || math.Abs(gy-tc.wy) > 1e-9 {
+			t.Fatalf("항등 변환 (%f,%f) → (%f,%f), want (%f,%f)", tc.sx, tc.sy, gx, gy, tc.wx, tc.wy)
+		}
+	}
+
+	// 변위: 소스 앵커 상당점 → 앵커+변위.
+	g.Reset()
+	actorGeoM(&g, [2]int{}, r, anchor, 6, -3, 0, 1)
+	gx, gy := g.Apply(anchor[0]-r[0], anchor[1]-r[1])
+	if math.Abs(gx-anchor[0]-6) > 1e-9 || math.Abs(gy-anchor[1]+3) > 1e-9 {
+		t.Fatalf("앵커+변위 = (%f,%f), want (%f,%f)", gx, gy, anchor[0]+6, anchor[1]-3)
+	}
+
+	// 회전: 앵커 상당점은 회전해도 앵커에 머문다(앵커 기준 변형 계약).
+	g.Reset()
+	actorGeoM(&g, [2]int{}, r, anchor, 0, 0, math.Pi/2, 1)
+	gx, gy = g.Apply(anchor[0]-r[0], anchor[1]-r[1])
+	if math.Abs(gx-anchor[0]) > 1e-9 || math.Abs(gy-anchor[1]) > 1e-9 {
+		t.Fatalf("회전 후 앵커 = (%f,%f), want (%f,%f)", gx, gy, anchor[0], anchor[1])
+	}
+
+	// 포즈: 스프라이트 (0,0)/(pw,ph) → rect 좌상단/우하단(rect에 맞춰 스케일).
+	g.Reset()
+	actorGeoM(&g, [2]int{25, 40}, r, anchor, 0, 0, 0, 1)
+	gx, gy = g.Apply(0, 0)
+	if math.Abs(gx-r[0]) > 1e-9 || math.Abs(gy-r[1]) > 1e-9 {
+		t.Fatalf("포즈 (0,0) → (%f,%f), want rect 좌상단 (%f,%f)", gx, gy, r[0], r[1])
+	}
+	gx, gy = g.Apply(25, 40)
+	if math.Abs(gx-(r[0]+r[2])) > 1e-9 || math.Abs(gy-(r[1]+r[3])) > 1e-9 {
+		t.Fatalf("포즈 (pw,ph) → (%f,%f), want rect 우하단 (%f,%f)", gx, gy, r[0]+r[2], r[1]+r[3])
+	}
+}
+
+// TestShaderOptionsBindUniforms — 결함 C 근본 원인 회귀: 드로우 옵션의 Uniforms가
+// 생성 시 바인딩돼 있는지. 옛 코드는 유니폼 맵을 갱신만 하고 옵션에 담지 않아
+// v2.9가 모든 유니폼을 0으로 채웠다(Density 0 → 비 전멸, Radius 0 → 램프 소멸).
+// 바인딩이 같은 맵 인스턴스여야 제자리 갱신이 드로우에 반영된다.
+func TestShaderOptionsBindUniforms(t *testing.T) {
+	sh, err := newShaders()
+	if err != nil {
+		t.Fatalf("newShaders: %v", err)
+	}
+	if sh.rainShop.Uniforms == nil || sh.lampShop.Uniforms == nil || sh.dustShop.Uniforms == nil {
+		t.Fatalf("옵션 Uniforms 미바인딩: rain=%v lamp=%v dust=%v",
+			sh.rainShop.Uniforms, sh.lampShop.Uniforms, sh.dustShop.Uniforms)
+	}
+	// 같은 맵 인스턴스 — 갱신이 옵션을 거쳐 셰이더에 그대로 가는지.
+	sh.rainU["Time"] = float32(7)
+	if got, ok := sh.rainShop.Uniforms["Time"].(float32); !ok || got != 7 {
+		t.Fatalf("rainShop.Uniforms가 rainU와 같은 맵이 아니다(Time=%v ok=%v)", got, ok)
+	}
+	sh.lampU["Radius"] = float32(150)
+	if got, ok := sh.lampShop.Uniforms["Radius"].(float32); !ok || got != 150 {
+		t.Fatalf("lampShop.Uniforms가 lampU와 같은 맵이 아니다(Radius=%v ok=%v)", got, ok)
+	}
+	sh.dustU["Time"] = float32(3)
+	if got, ok := sh.dustShop.Uniforms["Time"].(float32); !ok || got != 3 {
+		t.Fatalf("dustShop.Uniforms가 dustU와 같은 맵이 아니다(Time=%v ok=%v)", got, ok)
 	}
 }
