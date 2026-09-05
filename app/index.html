@@ -18,6 +18,12 @@
   }
   #seedbox { display: none; width: 140px; }
   #seedbox.show { display: block; }
+  /* 시드 단어 표시 — 캔버스 폰트는 ASCII라서 한글은 DOM이 담는다. */
+  #seedtext {
+    position: absolute; left: 0; right: 0; bottom: 40px; z-index: 10;
+    pointer-events: none; text-align: center;
+    font: 14px system-ui, sans-serif; color: rgba(232, 226, 210, 0.7);
+  }
 </style>
 </head>
 <body>
@@ -26,9 +32,16 @@
   <button id="seedtoggle">seed</button>
   <input id="seedbox" type="text" placeholder="seed word" autocomplete="off">
 </div>
+<div id="seedtext"></div>
 <script src="report-config.js"></script>
-<script src="bridge.js"></script>
-<button id="sendreport" style="position:absolute;right:8px;bottom:8px;z-index:10;font:12px system-ui;padding:6px 10px;opacity:.85" onclick="window.jdSendReport().then(t=>this.textContent=t)">Send report</button>
+<script src="host.js"></script>
+<div id="tools" style="position:absolute;right:8px;bottom:8px;z-index:10;display:flex;gap:6px;font:12px system-ui">
+  <button id="replay" style="padding:6px 10px;opacity:.85" onclick="window.jd.replay(15) ? this.textContent='3·2·1…' : this.textContent='replay n/a'; setTimeout(()=>this.textContent='replay 15s', 20000)">replay 15s</button>
+  <button id="clean" style="padding:6px 10px;opacity:.85" onclick="this.textContent = window.jd.setCleanScreen(!window.jd.cleanScreen()) ? 'clean: on' : 'clean'">clean</button>
+  <button id="share" style="padding:6px 10px;opacity:.85" onclick="(async()=>{const u=window.jdShareURL&&window.jdShareURL(); if(!u){this.textContent='share n/a';return;} const full=location.origin+location.pathname+'?seed='+encodeURIComponent(document.getElementById('seedbox').value||'')+'&s='+u; try{await navigator.clipboard.writeText(full); this.textContent='copied '+u.length+'ch';}catch(e){prompt('share URL', full);} })()">share</button>
+  <button id="sendreport" style="padding:6px 10px;opacity:.85" onclick="window.jdSendReport().then(t=>this.textContent=t)">Send report</button>
+</div>
+<style>body.clean #overlay, body.clean #tools, body.clean #seedtext { display: none !important; }</style>
 <script src="wasm_exec.js"></script>
 <script>
   const go = new Go();
