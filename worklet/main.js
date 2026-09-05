@@ -194,7 +194,7 @@ $('send').onclick = async () => {
   const j = window.__collectJSON();
   $('json').textContent = JSON.stringify(j, null, 1);
   try {
-    const r = await fetch('report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(j) });
+    const r = await fetch((window.JD_REPORT_URL || 'report') + '?kind=worklet', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(j) });
     $('offlineState').textContent += r.ok ? ' [전송됨]' : ' [전송 실패 ' + r.status + ' — 위 JSON을 복사해 전달]';
   } catch (e) { $('offlineState').textContent += ' [서버 없음 — 위 JSON을 복사해 전달]'; }
 };

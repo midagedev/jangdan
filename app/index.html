@@ -26,7 +26,9 @@
   <button id="seedtoggle">seed</button>
   <input id="seedbox" type="text" placeholder="seed word" autocomplete="off">
 </div>
+<script src="report-config.js"></script>
 <script src="bridge.js"></script>
+<button id="sendreport" style="position:absolute;right:8px;bottom:8px;z-index:10;font:12px system-ui;padding:6px 10px;opacity:.85" onclick="window.jdSendReport().then(t=>this.textContent=t)">Send report</button>
 <script src="wasm_exec.js"></script>
 <script>
   const go = new Go();

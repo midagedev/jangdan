@@ -162,3 +162,12 @@
     };
   };
 })();
+
+// 계측 JSON을 리포트 Worker로 전송(Pages/iPhone용). 로컬에서는 JD_REPORT_URL이 비어 있으면 아무것도 하지 않는다.
+window.jdSendReport = async function () {
+  const url = window.JD_REPORT_URL; if (!url) return 'no report url';
+  try {
+    const r = await fetch(url + '?kind=app', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(window.__jdStats()) });
+    return r.ok ? 'sent ' + (await r.json()).id : 'failed ' + r.status;
+  } catch (e) { return 'error ' + e; }
+};
