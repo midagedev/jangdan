@@ -15,7 +15,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const web = path.join(here, 'web');
 const resultsDir = path.join(here, 'results');
 const certDir = path.join(here, '.cert');
-const PORT = 8444;
+const PORT = Number(process.env.JD_PORT || 8444); // 병렬 라운드는 JD_PORT로 포트를 나눈다
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',

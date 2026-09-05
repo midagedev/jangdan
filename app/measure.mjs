@@ -17,7 +17,8 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url)); // app/
 const web = path.join(here, 'web');
 const resultsDir = path.join(here, 'results');
-const BASE = 'https://localhost:8444/';
+const PORT = Number(process.env.JD_PORT || 8444);
+const BASE = `https://localhost:${PORT}/`;
 
 const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(`--${k}`); return i >= 0 ? args[i + 1] : d; };

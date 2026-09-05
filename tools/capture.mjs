@@ -16,7 +16,8 @@ const opt = (k, d) => { const i = args.indexOf(`--${k}`); return i >= 0 ? args[i
 const out = opt('out', path.join(root, 'scratch', 'captures'));
 const browserName = opt('browser', 'chromium');
 fs.mkdirSync(out, { recursive: true });
-const BASE = 'https://localhost:8444/';
+const PORT = Number(process.env.JD_PORT || 8444); // app/serve.mjs와 같은 변수
+const BASE = `https://localhost:${PORT}/`;
 
 async function loadPlaywright() {
   try { return await import('playwright'); } catch {
@@ -31,7 +32,7 @@ function serverUp() {
 }
 let server = null;
 if (!(await serverUp())) {
-  server = spawn('node', [path.join(root, 'app', 'serve.mjs')], { stdio: 'ignore' });
+  server = spawn('node', [path.join(root, 'app', 'serve.mjs')], { stdio: 'ignore', env: { ...process.env, JD_PORT: String(PORT) } });
   for (let i = 0; i < 40 && !(await serverUp()); i++) await new Promise((r) => setTimeout(r, 250));
 }
 const layout = JSON.parse(fs.readFileSync(path.join(root, 'app/assets/room/layout.json'), 'utf8'));
