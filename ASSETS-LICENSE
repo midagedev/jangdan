@@ -1,0 +1,16 @@
+장단 / Jangdan — 이름·캐릭터·아트 자산 고지
+
+다음은 MIT 라이선스 대상이 아니며 저작권자(midagedev)가 권리를 보유합니다.
+재배포·2차 창작·상업적 이용은 사전 허락이 필요합니다.
+
+- 제품명 "장단 / Jangdan"과 로고
+- 레지던트 캐릭터(디자인·설정)
+- docs/concepts/ 의 컨셉 아트와 스타일 계약 문구
+- app/assets/ 및 tools/rack/ 파이프라인으로 만든 패널·스프라이트 이미지
+
+생성 이미지는 fal.ai 경유 FLUX.1 [dev] 등으로 만들었습니다. 해당 모델의 출력물
+이용 조건은 fal.ai 약관과 Black Forest Labs 라이선스를 따르며, 확인 상태는
+docs/concepts/README.md 에 기록합니다.
+
+The MIT license covers code only. The name, the resident character, concept
+art and generated UI artwork listed above are all rights reserved.

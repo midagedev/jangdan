@@ -1,0 +1,17 @@
+.env
+*.local
+scratch/
+spike/worklet/node_modules/
+spike/worklet/.cert/
+spike/worklet/results/
+app/web/app.wasm*
+app/web/wasm_exec.js
+app/web/engine.wasm
+app/web/processor.js
+app/web/still.png
+app/.cert/
+app/results/
+app/node_modules/
+spike/worklet/public/engine.wasm
+spike/worklet/public/engine.opt.wasm
+dist/
