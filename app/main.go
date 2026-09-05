@@ -75,8 +75,9 @@ type integ struct {
 
 	// 공유 URL 재생(?s=): 디코드된 엔트리를 블록 순서로 엔진에 보낸다. 재생이 남아 있는 동안
 	// 로컬 레지던트는 쉰다(로그 안에 만든 사람의 레지던트 궤적이 이미 들어 있다). 끝나면 레지던트가 이어 튼다.
-	shared    []session.Entry
-	sharedIdx int
+	shared     []session.Entry
+	sharedIdx  int
+	sharedWait bool // ?s=<id> 세션 GET이 호스트에서 진행 중 — settle할 때까지 매 프레임 재확인(§12.6)
 }
 
 func newInteg(word string) integ {
@@ -124,6 +125,29 @@ func (b *cmdBridge) Cmd(c engine.Cmd, a core.Author) {
 // updateIntegration — Tick 갱신 직후. 사용자 손→잠금, 레지던트 틱→Cmd, 방 뷰 연출 입력, 벽시계 드롭.
 func (g *game) updateIntegration() {
 	t := g.ctx.Tick
+	if g.in.sharedWait {
+		// ?s=<id> 세션 GET이 앱보다 늦게 도착하는 경우 — 호스트가 settle할 때까지 매 프레임
+		// 재확인하고 도착하면 재생을 시작한다(그동안 레지던트는 정상 진행, 도착 후 재생 우선).
+		if st := sharedLogState(); st != 0 {
+			g.in.sharedWait = false
+			if l := sharedLog(); l != nil {
+				g.in.shared = l.Entries
+				// 늦은 도착 보정: 엔트리 블록은 원 세션 시작 기준 절대값이라 현재 블록보다
+				// 과거면 전체가 한 프레임에 몰아 발송된다(호스트 cmd는 항상 now+2로 예약).
+				// 첫 엔트리를 현재 블록+2에 평행이동해 상대 간격만 유지한다.
+				if n := len(g.in.shared); n > 0 {
+					if base := uint32(t.Block) + 2; base > g.in.shared[0].Block {
+						off := base - g.in.shared[0].Block
+						for i := 0; i < n; i++ {
+							g.in.shared[i].Block += off
+						}
+					}
+				}
+			} else if st == 1 {
+				g.ctx.Bridge.Telemetry("open_failed", 1)
+			}
+		}
+	}
 	// 사용자 손·기기 뷰 반응은 오디오 시작 전에도 잡는다(시작 제스처와 진입이 같은 탭에
 	// 겹치는 창이 있다 — 잠금·텔레메트리가 한 프레임 늦는 것보다 놓치는 게 나쁘다).
 	if id, ok := g.device.JustGrabbed(); ok {
@@ -248,6 +272,14 @@ func newGame() (*game, error) {
 	g.in = newInteg(g.ctx.Bridge.SeedWord())
 	if l := sharedLog(); l != nil {
 		g.in.shared = l.Entries
+	} else {
+		switch sharedLogState() {
+		case 0:
+			g.in.sharedWait = true // 호스트 GET 진행 중 — updateIntegration에서 프레임마다 재확인
+		case 1:
+			// 페이로드는 도착했는데 디코드가 안 된다(손상) — 일반 세션 + 실패 신호만 남긴다.
+			g.ctx.Bridge.Telemetry("open_failed", 1)
+		}
 	}
 	// 모든 Cmd는 cmdBridge를 지난다(로그·화성 잠금·캡션 종료의 단일 소유자).
 	g.ctx.Bridge = &cmdBridge{Bridge: g.ctx.Bridge, g: g}

@@ -8,8 +8,9 @@
 // 시퀀스(P2-host): 로드 → 시작 전 게이트(캡션1·#tools 숨김·신규 API 종류) → 오디오
 // 제스처 드래그 → (시드 타이핑은 ?dev=1 전용 — 숨겨져 있으면 건너뛴다) → 캡션2 게이트 →
 // 호스트 검증(firstSound·param 섀도·state 왕복·replay) → 섀도 일치 게이트(30초 지점) →
-// markFrames → N초 정상 구간(step 16값) → 배경 탭 20초 → 기기 뷰 진입(캡션3)·CUTOFF
-// 드래그(캡션 종료)·Transport → 공유 URL 게이트 → 텔레메트리 저장 확인 → JSON 회수.
+// markFrames → N초 정상 구간(step 16값) → 배경 탭 20초 → 기기 뷰 진입(캡션3)·MASTER
+// 드래그(캡션 종료) → 공유 세션 게이트(P2-share: 저장·id URL·쿨다운·왕복·열기 재생·404)
+// → 텔레메트리 저장 확인 → JSON 회수.
 // 공유·기기 조작을 배경 창 뒤에 두는 이유: 정상 구간 프레임 계측은 방 뷰(활성)에서만.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -95,8 +96,14 @@ const context = await browser.newContext({
 });
 const page = await context.newPage();
 const pageErrors = [];
+let expected413Console = 0; // 의도적 413 주입의 자원 로드 실패(브라우저가 남기는 콘솔) — 일반 오류 카운트에서 제외
 page.on('pageerror', (e) => { pageErrors.push(e.message); console.error('[pageerror]', e.message); });
-page.on('console', (m) => { if (m.type() === 'error') { pageErrors.push(m.text()); console.error('[console.error]', m.text()); } });
+page.on('console', (m) => {
+  if (m.type() === 'error') {
+    if (/status of 413/.test(m.text())) { expected413Console++; return; } // C3 실패 주입의 예상 결과
+    pageErrors.push(m.text()); console.error('[console.error]', m.text());
+  }
+});
 
 try {
   const t0 = Date.now();
@@ -281,8 +288,7 @@ try {
   const devLayout = JSON.parse(fs.readFileSync(path.join(here, 'assets', 'device', 'layout.json'), 'utf8'));
   const S = 540 / 720;
   const [dx, dy, dw, dh] = roomLayout.device;
-  const shareBefore = await page.evaluate(() => ({
-    url: window.jdShareURL ? window.jdShareURL() : '',
+  const humanBefore = await page.evaluate(() => ({
     human: window.jd.log().filter((e) => e.author === 0).length,
     logLen: window.__jdStats().logLen,
     logArrLen: window.jd.log().length,
@@ -297,9 +303,8 @@ try {
 
   // MASTER(FX) 노브 드래그 — 기기 뷰 사람 경로가 host 로그·Go 미러 로그를 모두 지나는지
   // (cmdBridge가 단일 소유자). MASTER(31)을 고른 이유: 레지던트 moverParams(CutoffA·
-  // Reso A/B·EnvMod A/B·Drive·Delay)가 닿지 않는 파라미터라 URL 감량 어떤 단계에서도
-  // 이 드래그가 살아남는다(CUTOFF로 실측했더니 레지던트 스윕이 뒤덮어 URL이 동일 바이트
-  // 로 정체 — 감량 상한 단계에서 superseded). 첫 조작이므로 캡션 3도 여기서 끝난다.
+  // Reso A/B·EnvMod A/B·Drive·Delay)가 닿지 않는 파라미터라 공유 페이로드에 살아남는다.
+  // 첫 조작이므로 캡션 3도 여기서 끝난다.
   const k = devLayout.knobs.find((q) => q.section === 'fx' && q.name === 'MASTER');
   await page.mouse.move(k.cx * S, k.cy * S);
   await page.mouse.down();
@@ -312,32 +317,165 @@ try {
   await page.waitForTimeout(400);
   const cap3Hidden = await page.evaluate(() => document.getElementById('caption').hidden);
   const caption3EndsOk = cap3Hidden === true;
-  const shareMid = await page.evaluate(() => ({
-    url: window.jdShareURL ? window.jdShareURL() : '',
-    human: window.jd.log().filter((e) => e.author === 0).length,
-  }));
-  // Transport(재생 유지) — 기기 뷰 재생 버튼이 아직 없어 API로 보낸다(CmdKind 11).
-  // 스펙이 기대한 "URL이 자란다"는 이 경로에선 성립하지 않는다(실측): jd.cmd는 호스트
-  // 로그에만 남고 Go 미러 로그(share URL 인코더의 입력)는 Go가 보낸 Cmd만 받는다 — 제품
-  // UI 전부가 Go이므로 현재 제품 경로엔 구멍이 없지만, JS에서 직접 jd.cmd를 쓰는 미래
-  // UI는 공유 URL에 누락된다(잔여 간극, 보고서 참조). 이 단계의 게이트는 host 로그
-  // 사람 수 증가·logLen 정합으로 잡는다.
-  await page.evaluate(() => window.jd.cmd(11, 1, 0, 0, 0, 0, 0));
-  await page.waitForTimeout(300);
-  const shareAfter = await page.evaluate(() => ({
-    url: window.jdShareURL ? window.jdShareURL() : '',
+  const humanAfter = await page.evaluate(() => ({
     human: window.jd.log().filter((e) => e.author === 0).length,
     logLen: window.__jdStats().logLen,
     logArrLen: window.jd.log().length,
   }));
-  // 사람 경로 증명: (a) MASTER 드래그 뒤 Go 미러 로그가 자라 URL이 **내용·길이 모두**
-  // 달라진다(레지던트가 안 닿는 파라미터라 감량에 살아남는다), (b) host 로그 author=0
-  // 증가(드래그 ≥1 + 트랜스포트 1 = ≥2), (c) logLen 정합(logLen === log().length) —
-  // Go 미러는 같은 Go 스트림을 cmdBridge로 받으므로 host 정합이 필요조건이다.
-  // 미러 로그 직접 디코드는 이 게이트 범위 밖(URL 내용 변화가 간접 증거).
-  const shareOk = shareMid.url !== shareBefore.url && shareMid.url.length > shareBefore.url.length
-    && shareAfter.human >= shareBefore.human + 2
-    && shareAfter.logLen === shareAfter.logArrLen;
+  // 사람 경로 증명: (a) host 로그 author=0 증가(드래그 ≥1), (b) logLen 정합
+  // (logLen === log().length) — Go 미러는 같은 Go 스트림을 cmdBridge로 받으므로 host
+  // 정합이 필요조건이다. URL 내용 변화 증명은 아래 공유 게이트의 무손실 왕복이 잡는다.
+  const humanLogOk = humanAfter.human >= humanBefore.human + 1
+    && humanAfter.logLen === humanAfter.logArrLen;
+
+  // --- 공유 세션 게이트(P2-share — docs/impl-plan-2026-09-05.md §12.6). 계약 ↔ 단언:
+  //   C1 URL에는 id만 실린다(?s=<base62 10자>, ≤120자, 로그 페이로드·seed 없음)
+  //      A1 url이 /\/\?s=[0-9A-Za-z]{10}$/ 일치   A2 url.length ≤ 120   A3 'v2.'·'seed=' 부정
+  //   C2 저장 페이로드는 무손실(감량 0단계)·Worker 왕복 보존
+  //      A4 node GET log의 fnv1a === 페이지 shareLogHash   A5 GET log.length === shareLogChars
+  //      A6 열린 페이지 sharedEntries === Go shareDecodedEntries(같은 페이로드의 두 디코더 일치)
+  //   C3 실패를 조용히 넘기지 않는다(413 → share_failed)
+  //      A7 오버사이즈 직접 호출이 413으로 기각   A8 stats.shareFailed ≥ 1
+  //   C4 쿨다운 10초(KV 쓰기 한도 보호) — 재호출은 같은 URL, POST 없음
+  //      A9 두 번째 호출 URL === 첫 URL   A10 sharePosts 무증가
+  //   C5 열기 — GET 즉시 · 도착한 로그가 재생 저자 Cmd로 흐른다
+  //      A11 열린 페이지 sharedEntries > 0   A12 jd.log() author===2 ≥ 1   A13 tap 뒤 cmdsSent 증가
+  //   C6 열기 실패(404)는 일반 세션 + open_failed
+  //      A14 openFailed === 1   A15 해당 페이지 sharedEntries === 0 · pageerror 0
+  //   FAIL-first(변경 전 실측 app/results/20260905-124458-chromium.json): 공유 URL이 로그를
+  //   통째로 실어 shareUrlLenMid 4678자 — A1·A2·A3 전부 실패하는 입력이다.
+  const WORKER = 'https://jangdan-reports.midagedev.workers.dev';
+  // 로컬 telemetry(serve.mjs POST /report → app/results) 검증을 위해 JD_REPORT_URL은
+  // 다시 'report'로 돌아간다 — 실제 Worker 주소는 이 공유 구간에만 건다(레포 파일에
+  // 주소를 박지 않는다 — 배포 시 report-config.js가 소유).
+  await page.evaluate((w) => { window.JD_REPORT_URL = w + '/report'; }, WORKER);
+  // ① 오버사이즈(256KB 초과) → 413. Worker가 content-length에서 즉시 거부하므로 KV 쓰기 없음.
+  const overStatus = await page.evaluate(() => window.jd
+    .shareSession('v2.' + 'A'.repeat(300 * 1024), 1, 'x').then(() => null, (e) => e));
+  // ② 공유 — jdShareURL()이 Promise로 resolve하는 '?s=<id>' URL
+  const shareURL = await page.evaluate(() => window.jdShareURL());
+  // ③ 쿨다운 중 재호출 — 같은 URL, POST 없음
+  const shareURL2 = await page.evaluate(() => window.jdShareURL());
+  const shareStats = await page.evaluate(() => {
+    const s = window.__jdStats();
+    return {
+      posts: s.sharePosts, ok: s.shareOk, failed: s.shareFailed, bytes: s.shareBytes,
+      logChars: s.shareLogChars, logHash: s.shareLogHash, mirror: s.shareMirrorEntries,
+      decoded: s.shareDecodedEntries, block: s.liveBlock,
+    };
+  });
+  await page.evaluate(() => { window.JD_REPORT_URL = 'report'; }); // 로컬 telemetry로 복원
+  const shareIdOk = typeof shareURL === 'string' && /^https:\/\/[^/]+\/\?s=[0-9A-Za-z]{10}$/.test(shareURL);
+  const shareLenOk = typeof shareURL === 'string' && shareURL.length > 0 && shareURL.length <= 120;
+  const shareNoPayload = typeof shareURL === 'string' && !shareURL.includes('v2.') && !shareURL.includes('seed=');
+  // ④ 저장 왕복(node에서 Worker GET — 공개 읽기). 같은 id를 다시 받아 해시·길이를 잰다.
+  const shareId = shareIdOk ? new URL(shareURL).searchParams.get('s') : null;
+  let getLog = null;
+  let getBytes = null;
+  if (shareId) {
+    const r = await fetch(WORKER + '/sessions/' + shareId);
+    // Cloudflare가 GET 본문을 gzip+chunked로 주면 content-length 헤더가 없다(실측 0) —
+    // 크기는 해제 후 본문 문자 수로 기록한다.
+    const text = await r.text();
+    getBytes = text.length;
+    getLog = JSON.parse(text).log ?? null;
+  }
+  const fnv32a = (str) => {
+    const b = Buffer.from(str, 'utf8');
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < b.length; i++) { h = (h ^ b[i]) >>> 0; h = Math.imul(h, 16777619) >>> 0; }
+    return h;
+  };
+  const roundtripHashOk = getLog !== null && fnv32a(getLog) === shareStats.logHash;
+  const roundtripLenOk = getLog !== null && getLog.length === shareStats.logChars;
+  // ⑤ 열기 — 같은 컨텍스트의 새 페이지에서 공유 URL을 띄운다. Worker 주소는 init script로
+  // (세션 GET이 host.js 로드 즉시 필요해서), 직후 ''로 끊어 이 페이지의 telemetry가
+  // 어디로도 전송되지 않게 한다(측정 페이지가 운영 Worker를 오염시키지 않게).
+  const p2 = await context.newPage();
+  const p2Errors = [];
+  p2.on('pageerror', (e) => { p2Errors.push(e.message); console.error('[p2 pageerror]', e.message); });
+  p2.on('console', (m) => { if (m.type() === 'error') { p2Errors.push(m.text()); console.error('[p2 console.error]', m.text()); } });
+  await p2.addInitScript((w) => {
+    // 접근자 주입 — 로컬 report-config.js('')의 대입은 setter로 흡수한다. 해제는 load 이후:
+    // setTimeout(0)은 파서 블로킹 스크립트(report-config.js→host.js) fetch 틈에 끼어들어
+    // host.js 평가보다 먼저 발사되는 경합이 있다(실측 — 그래서 host.js가 빈 주소를 읽었다).
+    // load는 모든 동기 스크립트 뒤에만 오고, telemetry 첫 flush(60초·pagehide)보다 앞이다.
+    let rep = w + '/report';
+    Object.defineProperty(window, 'JD_REPORT_URL', {
+      configurable: true,
+      get: () => rep,
+      set: () => {},
+    });
+    window.addEventListener('load', () => { rep = ''; }); // 세션 GET 후 이 페이지 telemetry 차단
+  }, WORKER);
+  let openSharedEntries = null;
+  let openReplayCmds = null;
+  let openCmdsDelta = null;
+  let openOk = false;
+  if (shareId) {
+    await p2.goto(shareURL, { waitUntil: 'load', timeout: 45000 });
+    try {
+      await p2.waitForFunction(() => window.__jdStats && window.__jdStats().sharedEntries > 0, null, { timeout: 30000, polling: 200 });
+    } catch (e) {
+      const dbg = await p2.evaluate(() => ({
+        url: location.href,
+        jru: window.JD_REPORT_URL ?? null,
+        openFailed: window.__jdStats ? window.__jdStats().openFailed : null,
+        sharedEntries: window.__jdStats ? window.__jdStats().sharedEntries : null,
+        ready: window.jd ? window.jd.sharedLogReady() : null,
+      })).catch(() => null);
+      console.error('[p2 debug]', JSON.stringify(dbg));
+      throw e;
+    }
+    openSharedEntries = await p2.evaluate(() => window.__jdStats().sharedEntries);
+    const before = await p2.evaluate(() => ({
+      cmds: window.__jdStats().cmdsSent,
+      replay: window.jd.log().filter((e) => e.author === 2).length,
+    }));
+    await p2.mouse.click(270, 480); // 첫 제스처 — 오디오 시작(재생은 진짜 tick 뒤에 흐른다)
+    await p2.waitForFunction(
+      (n) => window.__jdStats().cmdsSent > n && window.jd.log().filter((e) => e.author === 2).length > 0,
+      before.cmds, { timeout: 20000, polling: 200 },
+    );
+    const after = await p2.evaluate(() => ({
+      cmds: window.__jdStats().cmdsSent,
+      replay: window.jd.log().filter((e) => e.author === 2).length,
+    }));
+    openReplayCmds = after.replay;
+    openCmdsDelta = after.cmds - before.cmds;
+    openOk = openSharedEntries > 0 && openReplayCmds > 0 && openCmdsDelta > 0
+      && openSharedEntries === shareStats.decoded && p2Errors.length === 0;
+  }
+  await p2.close();
+  // ⑥ 404 열기 방어 — 존재하지 않는 id(정규식은 통과) → open_failed + 일반 세션.
+  const p3 = await context.newPage();
+  const p3Errors = [];
+  let expected404Console = 0; // C6 주입(존재하지 않는 id)의 자원 로드 실패 — 브라우저가 남기는 콘솔
+  p3.on('pageerror', (e) => { p3Errors.push(e.message); console.error('[p3 pageerror]', e.message); });
+  p3.on('console', (m) => {
+    if (m.type() === 'error') {
+      if (/status of 404/.test(m.text())) { expected404Console++; return; } // 의도적 404 프로브의 예상 결과
+      p3Errors.push(m.text()); console.error('[p3 console.error]', m.text());
+    }
+  });
+  await p3.addInitScript((w) => {
+    // p2와 같은 접근자 주입(해제 경합 원본 주석은 p2 쪽에 있다).
+    let rep = w + '/report';
+    Object.defineProperty(window, 'JD_REPORT_URL', { configurable: true, get: () => rep, set: () => {} });
+    window.addEventListener('load', () => { rep = ''; });
+  }, WORKER);
+  await p3.goto(BASE + '?s=abcdefghij', { waitUntil: 'load', timeout: 45000 });
+  await p3.waitForFunction(() => window.__jdStats && window.__jdStats().openFailed >= 1, null, { timeout: 15000, polling: 200 });
+  const p404 = await p3.evaluate(() => ({
+    failed: window.__jdStats().openFailed,
+    entries: window.__jdStats().sharedEntries,
+  }));
+  const open404Ok = p404.failed === 1 && p404.entries === 0 && p3Errors.length === 0;
+  await p3.close();
+  const coolOk = shareURL2 === shareURL && shareStats.posts === 2; // 413 시도 1 + 성공 1
+  const failSurfacedOk = overStatus === 413 && shareStats.failed >= 1;
+  const shareOk = shareIdOk && shareLenOk && shareNoPayload && shareStats.ok === 1;
+  const roundtripOk = roundtripHashOk && roundtripLenOk;
 
   // --- 호스트 검증 6: 텔레메트리가 app/results에 저장되는가(kind=telemetry). ---
   const flushStatus = await page.evaluate(() => window.jd.telemetryFlush());
@@ -426,16 +564,30 @@ try {
     shadowRetried,
     shadowLiveLen: shadowCmp.liveLen,
     shadowLen: shadowCmp.shadowLen,
-    // 공유 URL·사람 로그
+    // 공유 세션(P2-share)·사람 로그
+    humanLogOk,
+    humanBefore: humanBefore.human,
+    humanAfter: humanAfter.human,
+    humanLogLen: humanAfter.logLen,
+    humanLogArrLen: humanAfter.logArrLen,
     shareOk,
-    shareUrlLenBefore: shareBefore.url.length,
-    shareUrlLenMid: shareMid.url.length,
-    shareUrlLenAfter: shareAfter.url.length,
-    shareUrlChanged: shareMid.url !== shareBefore.url,
-    shareHumanBefore: shareBefore.human,
-    shareHumanAfter: shareAfter.human,
-    shareLogLen: shareAfter.logLen,
-    shareLogArrLen: shareAfter.logArrLen,
+    shareId,
+    shareURL,
+    shareLen: typeof shareURL === 'string' ? shareURL.length : null,
+    shareStats,
+    getBytes,
+    roundtripOk,
+    coolOk,
+    failSurfacedOk,
+    overStatus,
+    openOk,
+    openSharedEntries,
+    openReplayCmds,
+    openCmdsDelta,
+    open404Ok,
+    open404Failed: p404.failed,
+    expected413Console,
+    expected404Console,
     hostTelemetryFlush: flushStatus,
     hostTelemetrySent: telemetrySent,
     hostTelemetryOk: telemetryOk,
@@ -462,7 +614,11 @@ try {
     `shadow=${j.shadowOk ? 'OK' : 'FAIL diffs=' + JSON.stringify(j.shadowDiffs) + (j.shadowRetried ? '(재시도 후)' : '')} ` +
     `caption1=${caption1Ok ? 'OK' : 'FAIL'} 2=${caption2Ok ? 'OK' : 'FAIL'} 3=${caption3Ok ? 'OK' : 'FAIL'}/end=${caption3EndsOk ? 'OK' : 'FAIL'} ` +
     `tools=${toolsHiddenOk ? 'hidden' : 'FAIL(' + pre.toolsDisplay + ')'} api=${apiTypesOk ? 'OK' : 'FAIL'} ` +
-    `share=${j.shareOk ? 'OK ' + j.shareUrlLenBefore + '→' + j.shareUrlLenMid + ' human+' + (j.shareHumanAfter - j.shareHumanBefore) : 'FAIL'} ` +
+    `share=${j.shareOk ? 'OK id=' + j.shareId + ' ' + j.shareStats.logChars + 'ch' : 'FAIL'} ` +
+    `roundtrip=${j.roundtripOk ? 'OK ' + j.getBytes + 'B' : 'FAIL'} ` +
+    `open=${j.openOk ? 'OK e=' + j.openSharedEntries + ' rep=' + j.openReplayCmds : 'FAIL'} ` +
+    `404=${j.open404Ok ? 'OK' : 'FAIL'} cool=${j.coolOk ? 'OK' : 'FAIL'} 413=${j.failSurfacedOk ? 'OK' : 'FAIL'} ` +
+    `human=${j.humanLogOk ? '+' + (j.humanAfter - j.humanBefore) : 'FAIL'} ` +
     `activeHidden=${j.activeHiddenFrames} telemetry=${telemetryOk ? 'OK ' + flushStatus + ' ' + (j.hostTelemetryEvents ?? 0) + 'ev' : 'FAIL ' + flushStatus + ' file=' + (j.hostTelemetryFile ?? 'none')}`
   );
 

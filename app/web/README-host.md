@@ -50,6 +50,10 @@ new AudioWorkletNode(ctx, 'jd', {
 - `jd.hint(state)` — 첫 접촉 캡션 표시. `window.JD_CAPTIONS[state]`를 `#caption`에 넣고
   보이게; 등록 안 된 상태(0 포함)는 숨긴다(입력 방어 — 문구 소유자는 Go main, 상태 1·2·3).
 - `jd.telemetryFlush()` — 텔레메트리 배치를 즉시 전송(반환 Promise\<status 문자열\>).
+- `jd.shareSession(payload, seed, word)` → `Promise<url>` — 공유 세션 저장(§8). 쿨다운 중
+  재호출은 POST 없이 마지막 URL을 그대로 resolve한다.
+- `jd.sharedLog()` / `jd.sharedLogReady()` — `?s=` 열기 상태(§8). 페이로드 문자열과
+  `-1 없음/실패 · 0 GET 진행 중 · 1 도착`(Go `sharedLogState`와 같은 값).
 
 `author`: 0 Human · 1 Resident · 2 Replay · 3 System(`app/core/core.go` Author와 같은 값).
 CmdKind: 0 SetParam · 1 BassStep · 2 DrumStep · 3 SelectPattern · 4 Mute · 5 Trigger · 6 Drop ·
@@ -109,6 +113,9 @@ UI 상태 읽기(`param`·`bassStep`·`drumStep`·`muted`·`slot`·`keyRoot`·`c
 | `seed_open` | 1 | URL에 seed 파라미터 |
 | `worklet_error` | 1 | processorerror/시작 실패 |
 | `shadow_error` | 1 | 섀도 엔진 인스턴스화/초기화 실패(폴백 값으로 동작) |
+| `share_ok` | POST 본문 문자 수 | 공유 저장 성공(§8) |
+| `share_failed` | HTTP 상태(0=네트워크/주소 없음, −1=응답 이상) | 공유 저장 실패 — 조용히 넘기지 않는다 |
+| `open_failed` | 1 | `?s=` 열기 실패(404·손상·주소 없음) — 일반 세션으로 진행 |
 
 전송: `visibilitychange(hidden)`·`pagehide`·60초마다 `navigator.sendBeacon(JD_REPORT_URL, …)`
 (sendBeacon 실패/없음 → fetch keepalive — **헤더 없음**). **본문 종류는 `text/plain` Blob** —
@@ -179,11 +186,18 @@ node app/measure.mjs --browser chromium --seconds 20   # webkit도 같은 인수
 state:get 왕복으로 워클릿 파라미터 uint16(=3686)이 **정확히** 일치, `jd.replay(5)` → replayDone 1,
 **섀도 일치**(위 §2 — 시작+30초, 6개 영역, 불일치 시 600ms 뒤 1회 재시도),
 **시작 전 게이트**(캡션1 표시·`#tools`/`#overlay` display none·keyRoot/chord/mode/muted 종류),
-**캡션2**(시작 후 4초 시점 문구)·**캡션3**(기기 뷰 첫 진입)·**캡션3 종료**(CUTOFF 드래그 뒤 hidden),
-**공유 URL 게이트**(기기 뷰 진입 → CUTOFF 드래그 → `jd.cmd(11,…)` Transport; URL 길이
-단조 증가 + host 로그 author=0 ≥2 증가 + `logLen === log().length`), 액티브 구간 hiddenFrames 0,
+**캡션2**(시작 후 4초 시점 문구)·**캡션3**(기기 뷰 첫 진입)·**캡션3 종료**(MASTER 드래그 뒤 hidden),
+**사람 로그 게이트**(MASTER 드래그 → host 로그 author=0 증가 + `logLen === log().length`),
+**공유 세션 게이트**(§8: id URL 형식·≤120자·무손실 왕복[fnv1a]·쿨다운 재호출·413 표면화·
+새 페이지 열기 재생[sharedEntries·author=2·cmdsSent]·404 → open_failed + 일반 세션 —
+계약↔단언 표는 measure.mjs 주석), 액티브 구간 hiddenFrames 0,
 텔레메트리가 app/results에 kind=telemetry로 저장(flush `sent(beacon)`/`sent`,
-`telemetrySent ≥ 1`), console/pageerror 0건. 시드 타이핑(overlayKeys 증명)은 `?dev=1` 실행에서만
+`telemetrySent ≥ 1`), console/pageerror 0건(의도적 실패 주입[413·404]이 브라우저 콘솔에
+남기는 자원 오류는 예상 필드 `expected413Console`·`expected404Console`로 분리 계상).
+공유 구간에서만 페이지의 `JD_REPORT_URL`에 실제 Worker 주소를 주입한다(레포 파일에는
+주소를 박지 않는다 — 배포 시 report-config.js가 소유). 열기(p2·p3) 페이지는 접근자
+주입으로 세션 GET 뒤 telemetry를 차단한다(measure.mjs p2 주석의 경합 원본 참조).
+시드 타이핑(overlayKeys 증명)은 `?dev=1` 실행에서만
 — 이 흐름은 dev 없이 도므로 `#overlay`가 숨겨져 있으면 건너뛴다.
 결과 JSON: `app/results/host-<browser>.json`.
 
@@ -196,7 +210,61 @@ rgba(232,226,210,0.7), 하단)가 `#seedbox` 값을 미러한다 — 캔버스 �
 (host.js의 rAF 패치가 Go 초기화보다 먼저여야 한다).
 
 첫 접촉 캡션: `<div id="caption" hidden>` + `window.JD_CAPTIONS` 스크립트(문구·스타일은 리드
-소유, 상태 판정은 Go main의 `updateCaption` → `jd.hint(state)`). 개발 버튼(`#tools`)·시드
+소유, 상태 판정은 Go main의 `updateCaption` → `jd.hint(state)`). **`#tools`는 host.js 스크립트보다
+앞에 있어야 한다** — share 버튼의 클릭 와이어링(비동기 저장·쿨다운·클립보드)을 host.js가 로드
+시점에 소유한다(인라인 onclick이 아님). 개발 버튼(`#tools`)·시드
 오버레이(`#overlay`)는 **`?dev=1`에서만** — host.js가 `body.dev`를 단다(CSS
 `body:not(.dev)` 규칙). `#seedtext`는 사용자가 늘 보는 값이라 항상 표시. `body.clean`은
 `#caption`도 함께 숨긴다. `<title>`은 "장단 / Jangdan".
+
+## 8. 공유 세션 (§12.6 — URL에는 id만)
+
+공유 URL은 `location.origin + location.pathname + '?s=' + <id 10자>` — 로그 페이로드·seed가
+URL에 실리지 않는다(id-only 계약). 저장소는 리포트 Worker의 세션 라우트(cf/worker.js —
+`POST {베이스}/sessions` → `{id}`, `GET {베이스}/sessions/<id>`, 공개·불변·1년 캐시).
+**베이스의 단일 소유자는 `JD_REPORT_URL`**(report-config.js — 배포 시 deploy-pages.sh가 쓴다):
+host.js는 `.../report` 접미를 뗀 `sessionsBase()`를 파생하고, 레포 파일에 Worker 주소를
+박지 않는다. 로컬 serve.mjs(8444)도 오리진 허용 목록에 들어 있다.
+
+**저장 흐름** — Go `jdShareURL()`(share_js.go)이 무손실 인코딩
+`session.EncodeURL(log)`(감량 0단계 — `EncodeURLBudget` 사다리는 공유 경로에서 폐지)으로
+페이로드를 만들고 `jd.shareSession(payload, seed, word)`을 기다린다:
+
+```
+[share 버튼](?dev=1 #tools) → jdShareURL() → EncodeURL(log)
+  → jd.shareSession → (오디오 시작 뒤면) state:get으로 키프레임 상태 base64 동봉
+  → POST {베이스}/sessions  본문 {v:2, seed, word, log, state, meta}  text/plain(단순 요청·preflight 없음)
+  → {id} → '?s=<id>' URL → 클립보드(거부 시 prompt 폴백) · 버튼 "copied <id>"
+  telemetry: 성공 share_ok(본문 문자 수) / 실패 share_failed(HTTP 상태; 0=네트워크·주소 없음)
+  버튼: 실패 시 "share failed <상태>" — 실패를 조용히 넘기지 않는다
+```
+
+**쿨다운 10초**(`SHARE_COOLDOWN_MS`) — 무료 KV 쓰기 한도(1,000/일) 보호가 목적. 성공 직후부터
+10초 동안 `shareSession` 재호출은 POST 없이 마지막 URL을 그대로 resolve하고, 버튼 클릭은
+그 URL을 다시 복사한다(`copied <id> (cooldown)` 라벨로 직전 세션 id임을 표시). 진행 중 호출은
+같은 Promise를 공유한다(중복 POST 방지). `stats.sharePosts`는 실제 POST 시도만 센다.
+
+**열기 흐름** — `?s=`가 있으면 host.js 평가 시점(페이지 로드 즉시, app.wasm과 병렬)에 GET을
+시작한다. 도착한 페이로드는 `jd.sharedLog()`로 Go가 프레임 폴링해 `session.DecodeURL`로
+디코드, 엔트리를 블록 순서로 `Replay` 저자 Cmd로 재생한다(늦은 도착은 첫 엔트리를 현재
+블록+2로 평행이동 — 호스트 cmd가 항상 now+2로 예약하기 때문). 재생이 남은 동안 로컬
+레지던트는 쉬고(공유 로그에 만든 사람의 레지던트 궤적이 이미 있다), 끝나면 이어 튼다.
+저장된 `word`는 `?seed=`가 없고 사용자가 시드 박스를 안 고쳤을 때만 채운다. 저장된 `state`
+필드는 이 라운드의 열기에서 쓰지 않는다(리플레이 재생으로 충분 — state 즉시 적용은 후속).
+
+```
+[링크 열기] ?s=<id> → host.js 즉시 GET {베이스}/sessions/<id> → {log, word}
+  → jd.sharedLog()/sharedLogReady() → Go 디코드(sharedEntries 계상) → 첫 제스처 뒤 재생
+  실패(404·200인데 log가 v2.가 아님·주소 없음): open_failed 텔레메트리 + 경고 1줄 → 일반 세션
+```
+
+**입력 3클래스 방어**: ① 악의 입력(`?s=../..`·긴 문자열 등) — id 정규식 `^[0-9A-Za-z]{10}$`
+불일치로 **조용히 무시**(콘솔 출력 없음). ② 손상(200인데 `log`가 `v2.` 페이로드가 아니거나
+Go 디코드 실패) — `open_failed` + 일반 세션. ③ 구버전 `v1.` — 거부 경고 1줄 + 일반 세션.
+인라인 `?s=v2.…` 페이로드(과거 URL 형식)는 당분간 병행 디코드한다.
+
+**용량** — Worker 본문 상한 256KB(문자 수로 계량, 초과 시 413 → `share_failed`). 실측
+(2026-09-06, chromium 60s 런): 114.8초 세션 = 로그 9,323자·1,349 엔트리(≈11.8 엔트리/초,
+엔트리당 ≈6.9자) → POST 본문 10,334자. 30분 외삽 ≈ **146K자(143KB)** — 상한의 56%로,
+30분 세션이 안쪽에 들어온다. 엔트리 발생률은 레지던트 활동·조작량에 비례해 오르므로
+장시간 세션은 감량 사다리(EncodeURLBudget) 재도입이 후속 과제다.

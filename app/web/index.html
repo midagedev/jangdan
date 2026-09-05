@@ -32,6 +32,8 @@
     background: rgba(20, 18, 16, 0.55); padding: 10px 18px; border-radius: 12px;
     pointer-events: none;
   }
+  /* 기기 뷰 캡션(상태 3)은 하단 트랜스포트 줄을 덮지 않게 더 위로(비전 FIX 2026-09-06: 72px는 DROP 상단을 덮었다). */
+  #caption[data-state="3"] { bottom: 150px; }
   /* 개발 버튼·시드 오버레이는 ?dev=1에서만(host.js가 body.dev를 단다). #seedtext는 항상. */
   #tools { position: absolute; right: 8px; bottom: 8px; z-index: 10; display: flex; gap: 6px; font: 12px system-ui; }
   body:not(.dev) #tools, body:not(.dev) #overlay { display: none; }
@@ -45,19 +47,21 @@
 </div>
 <div id="seedtext"></div>
 <div id="caption" hidden></div>
+<!-- #tools는 host.js 스크립트보다 앞에 있어야 host.js가 로드 시점에 버튼을 잡는다
+     (share는 이제 host.js가 클릭을 소유한다 — 비동기 저장·쿨다운·클립보드). -->
+<div id="tools">
+  <button id="replay" style="padding:6px 10px;opacity:.85" onclick="window.jd.replay(15) ? this.textContent='3·2·1…' : this.textContent='replay n/a'; setTimeout(()=>this.textContent='replay 15s', 20000)">replay 15s</button>
+  <button id="clean" style="padding:6px 10px;opacity:.85" onclick="this.textContent = window.jd.setCleanScreen(!window.jd.cleanScreen()) ? 'clean: on' : 'clean'">clean</button>
+  <button id="share" style="padding:6px 10px;opacity:.85">share</button>
+  <button id="sendreport" style="padding:6px 10px;opacity:.85" onclick="window.jdSendReport().then(t=>this.textContent=t)">Send report</button>
+</div>
 <script>window.JD_CAPTIONS = {
-  1: '탭하면 소리가 켜집니다',
+  1: '화면 어디든 탭하면 소리가 켜집니다',
   2: '책상 위 기기를 탭하면 직접 만질 수 있어요',
   3: '노브는 위아래로 드래그, 패드는 탭 · 위 이름판을 탭하면 방으로',
 };</script>
 <script src="report-config.js"></script>
 <script src="host.js"></script>
-<div id="tools">
-  <button id="replay" style="padding:6px 10px;opacity:.85" onclick="window.jd.replay(15) ? this.textContent='3·2·1…' : this.textContent='replay n/a'; setTimeout(()=>this.textContent='replay 15s', 20000)">replay 15s</button>
-  <button id="clean" style="padding:6px 10px;opacity:.85" onclick="this.textContent = window.jd.setCleanScreen(!window.jd.cleanScreen()) ? 'clean: on' : 'clean'">clean</button>
-  <button id="share" style="padding:6px 10px;opacity:.85" onclick="(async()=>{const u=window.jdShareURL&&window.jdShareURL(); if(!u){this.textContent='share n/a';return;} const full=location.origin+location.pathname+'?seed='+encodeURIComponent(document.getElementById('seedbox').value||'')+'&s='+u; try{await navigator.clipboard.writeText(full); this.textContent='copied '+u.length+'ch';}catch(e){prompt('share URL', full);} })()">share</button>
-  <button id="sendreport" style="padding:6px 10px;opacity:.85" onclick="window.jdSendReport().then(t=>this.textContent=t)">Send report</button>
-</div>
 <style>body.clean #overlay, body.clean #tools, body.clean #seedtext, body.clean #caption { display: none !important; }</style>
 <script src="wasm_exec.js"></script>
 <script>

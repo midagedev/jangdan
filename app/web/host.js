@@ -61,6 +61,18 @@
     replayDone: 0,
     telemetryQueued: 0,
     telemetrySent: 0,
+    // 공유 세션(§12.6) — 저장·열기 상태. sharedEntries는 Go가 디코드 수를 채운다.
+    sharedId: null,
+    sharedBytes: null,   // 열기: 받은 log 페이로드 문자 수
+    sharedEntries: 0,    // 열기: Go 디코드 엔트리 수(도착 전 0)
+    openFailed: 0,
+    sharePosts: 0,       // POST /sessions 시도 수(쿨다운 중 재호출은 올라가지 않는다)
+    shareOk: 0,
+    shareFailed: 0,
+    shareBytes: null,    // 성공한 POST 본문 문자 수(Worker 한도 256KB와 같은 단위)
+    shareLogChars: null, // 저장한 log 페이로드 문자 수
+    shareLogHash: null,  // log 페이로드 FNV-1a(measure 왕복 검증)
+    shareURL: null,
   };
   window.__jdStatsSet = (k, v) => { stats[k] = v; };
 
@@ -485,9 +497,10 @@
 
   // ==== 시드 단어 DOM(#seedtext 미러 — 캔버스 폰트는 ASCII라 한글은 DOM이 담당) ====
   const seedtext = document.getElementById('seedtext');
+  let seedboxTouched = false; // 사용자가 직접 고쳤다 — 공유 세션의 저장 word로 덮어쓰지 않는다
   if (seedbox && seedtext) {
     const sync = () => { seedtext.textContent = seedbox.value; };
-    seedbox.addEventListener('input', sync);
+    seedbox.addEventListener('input', () => { seedboxTouched = true; sync(); });
     sync();
   }
   const seedtoggle = document.getElementById('seedtoggle');
@@ -505,6 +518,60 @@
     if (u !== null && seedbox) {
       seedbox.value = u;
       telemetry('seed_open', 1);
+    }
+  }
+
+  // ==== ?s= 공유 세션 열기(§12.6) — 페이지 로드 즉시 GET(app.wasm 로드와 병렬) ====
+  // 3클래스 방어: 악의 입력(?s=../..·긴 문자열)은 id 정규식 불일치로 그냥 무시,
+  // 손상(200인데 log가 v2. 페이로드가 아님·디코드 실패)은 일반 세션 + open_failed,
+  // 구버전(v1.)은 거부 로그 1줄 + 일반 세션. 인라인 v2.(과거 URL 형식)는 당분간 병행 지원.
+  // 도착한 페이로드는 jd.sharedLog()로 Go가 프레임 폴링해 디코드·재생한다.
+  const sharedSess = { ready: -1, payload: '' }; // ready: -1 없음/실패 · 0 GET 진행 중 · 1 도착
+  {
+    const s = new URLSearchParams(location.search).get('s');
+    if (s) {
+      if (/^[0-9A-Za-z]{10}$/.test(s)) {
+        const base = sessionsBase();
+        if (base) {
+          sharedSess.ready = 0;
+          stats.sharedId = s;
+          fetch(base + '/sessions/' + s)
+            .then((r) => {
+              if (!r.ok) throw new Error('GET /sessions ' + r.status);
+              return r.json();
+            })
+            .then((j) => {
+              if (typeof j.log !== 'string' || j.log.slice(0, 3) !== 'v2.') throw new Error('log가 v2. 페이로드가 아님');
+              sharedSess.payload = j.log;
+              sharedSess.ready = 1;
+              stats.sharedBytes = j.log.length;
+              // 시드 단어: 저장된 word를 seedbox에(?seed=가 우선이고, 사용자가 이미 고쳤으면 건드리지 않는다).
+              if (new URLSearchParams(location.search).get('seed') === null && !seedboxTouched
+                && seedbox && typeof j.word === 'string' && j.word) {
+                seedbox.value = j.word;
+                if (seedtext) seedtext.textContent = j.word;
+              }
+            })
+            .catch((e) => {
+              sharedSess.ready = -1;
+              sharedSess.payload = '';
+              stats.openFailed++;
+              telemetry('open_failed', 1);
+              console.warn('jd host: 공유 세션 열기 실패 — 일반 세션으로 진행:', e && e.message ? e.message : e);
+            });
+        } else {
+          stats.openFailed++;
+          telemetry('open_failed', 1);
+          console.warn('jd host: ?s= 세션을 가져올 주소(JD_REPORT_URL)가 없다 — 일반 세션으로 진행');
+        }
+      } else if (s.slice(0, 3) === 'v2.') {
+        sharedSess.payload = s; // 인라인 페이로드 — 디코드는 Go(session.DecodeURL)가 한다
+        sharedSess.ready = 1;
+        stats.sharedBytes = s.length;
+      } else if (s.slice(0, 3) === 'v1.') {
+        console.warn('jd host: 지원하지 않는 v1 공유 페이로드 — 일반 세션으로 진행');
+      }
+      // 그 외(?s=../..·긴 문자열 등) — id 정규식 불일치로 무시(콘솔 출력 없음).
     }
   }
 
@@ -532,6 +599,7 @@
     const c = window.JD_CAPTIONS;
     if (c && Object.prototype.hasOwnProperty.call(c, state) && c[state] != null) {
       captionEl.textContent = c[state];
+      captionEl.dataset.state = String(state); // CSS가 상태별 위치를 고른다(기기 뷰는 트랜스포트 위)
       captionEl.hidden = false;
     } else {
       captionEl.hidden = true;
@@ -542,6 +610,97 @@
   // #seedtext는 사용자가 늘 보는 값이라 항상 둔다.
   if (new URLSearchParams(location.search).get('dev') === '1') {
     document.body.classList.add('dev');
+  }
+
+  // ==== 공유 세션 저장(§12.6): POST {베이스}/sessions → {id} → '?s=<id>' URL ====
+  // 베이스는 JD_REPORT_URL('.../report' 전체 URL)에서 마지막 '/report'를 뗀 것 — 주소의
+  // 단일 소유자는 report-config.js(배포 시 deploy-pages.sh가 쓴다), 여기에 하드코딩하지 않는다.
+  // 쿨다운 10초: 무료 KV 쓰기 한도(1,000/일) 보호. 쿨다운 중 호출은 마지막 URL을 그대로
+  // 돌려준다(POST 없음 — 버튼은 그것을 다시 복사한다). 진행 중 호출은 같은 Promise를 공유한다.
+  // 실패(네트워크·403·413)는 상태 숫자로 기각하며 share_failed 텔레메트리를 남긴다(조용히 넘기지 않는다).
+  const SHARE_COOLDOWN_MS = 10000;
+  let shareCoolUntil = 0;
+  let shareLastURL = '';
+  let shareInFlight = null;
+  function sessionsBase() {
+    const u = window.JD_REPORT_URL;
+    if (typeof u !== 'string' || !u) return null;
+    return /\/report\/?$/.test(u) ? u.replace(/\/report\/?$/, '') : u;
+  }
+  function fnv32a(str) { // FNV-1a 32(UTF-8 바이트) — measure가 저장 왕복을 같은 해시로 잰다
+    const b = new TextEncoder().encode(str);
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < b.length; i++) {
+      h = (h ^ b[i]) >>> 0;
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h;
+  }
+  async function doShareSession(payload, seed, word) {
+    const base = sessionsBase();
+    if (!base) {
+      stats.shareFailed++;
+      telemetry('share_failed', 0);
+      throw 0; // 상태 0 = 주소 없음(설정 문제)
+    }
+    // 공유 시점 키프레임 상태(저장 필드 state — 이 라운드의 열기에서는 쓰지 않는다,
+    // 리플레이로 재현. state 즉시 적용은 후속 라운드). 오디오 시작 전이면 상태 없이 저장.
+    let state = null;
+    const meta = {};
+    if (node) {
+      try {
+        const st = await debugStateGet();
+        let bin = '';
+        for (let i = 0; i < st.bytes.length; i++) bin += String.fromCharCode(st.bytes[i]);
+        state = btoa(bin);
+        meta.stateBlock = st.block;
+      } catch (e) { /* 상태 없음 — 그대로 저장 */ }
+    }
+    const body = JSON.stringify({
+      v: 2, seed: seed >>> 0, word: String(word == null ? '' : word).slice(0, 64),
+      log: String(payload), state, meta,
+    });
+    stats.sharePosts++;
+    stats.shareLogChars = String(payload).length;
+    stats.shareLogHash = fnv32a(String(payload));
+    try {
+      // 본문 종류 text/plain(단순 요청 — preflight 없음; 수신자는 본문을 JSON.parse하고
+      // 종류 헤더는 안 본다. 텔레메트리 경로와 같은 규칙).
+      const r = await fetch(base + '/sessions', { method: 'POST', body });
+      if (!r.ok) {
+        stats.shareFailed++;
+        telemetry('share_failed', r.status);
+        throw r.status;
+      }
+      const j = await r.json();
+      if (!j || typeof j.id !== 'string' || !/^[0-9A-Za-z]{10}$/.test(j.id)) {
+        stats.shareFailed++;
+        telemetry('share_failed', -1);
+        throw -1;
+      }
+      const url = location.origin + location.pathname + '?s=' + j.id;
+      stats.shareOk++;
+      stats.shareBytes = body.length; // Worker 한도(본문 text.length 256KB)와 같은 단위
+      stats.shareURL = url;
+      telemetry('share_ok', body.length);
+      shareLastURL = url;
+      shareCoolUntil = performance.now() + SHARE_COOLDOWN_MS;
+      return url;
+    } catch (e) {
+      if (typeof e === 'number') throw e; // 위 경로에서 이미 텔레메트리·카운터를 계상했다
+      stats.shareFailed++;
+      telemetry('share_failed', 0); // 네트워크 실패
+      throw 0;
+    }
+  }
+  function shareSession(payload, seed, word) {
+    if (shareInFlight) return shareInFlight;
+    if (performance.now() < shareCoolUntil && shareLastURL) return shareLastURL;
+    const p = doShareSession(payload, seed, word);
+    shareInFlight = p;
+    const clear = () => { if (shareInFlight === p) shareInFlight = null; };
+    p.then(clear, clear);
+    return p;
   }
 
   window.jd = {
@@ -594,7 +753,53 @@
       return v ? v.slice(0, shadow.w.jd_state_write()) : null;
     },
     telemetryFlush,
+    // 공유 세션(§12.6) — jdShareURL(Go)이 shareSession을 부르고, ?s= 열기 상태는
+    // Go 폴링이 sharedLog/sharedLogReady로 읽는다. sharedLog는 도착한 페이로드 문자열.
+    shareSession,
+    sharedLog: () => (sharedSess.ready === 1 ? sharedSess.payload : ''),
+    sharedLogReady: () => sharedSess.ready,
   };
+
+  // ==== share 버튼(?dev=1 #tools) — 비동기 jdShareURL() → 클립보드 · 쿨다운 재복사 ====
+  // #tools는 host.js보다 앞에 있어야 여기서 잡힌다(index.html 참조). 쿨다운 중 클릭은
+  // 마지막 URL을 다시 복사한다(직전 세션 id임을 표시 — POST는 shareSession이 이미 막는다).
+  const shareBtn = document.getElementById('share');
+  if (shareBtn) {
+    let restoreTimer = 0;
+    const resetSoon = () => {
+      clearTimeout(restoreTimer);
+      restoreTimer = setTimeout(() => { shareBtn.textContent = 'share'; }, 4000);
+    };
+    shareBtn.addEventListener('click', async () => {
+      if (performance.now() < shareCoolUntil && shareLastURL) {
+        try {
+          await navigator.clipboard.writeText(shareLastURL);
+          shareBtn.textContent = 'copied ' + (new URL(shareLastURL).searchParams.get('s') || '') + ' (cooldown)';
+        } catch (e) { prompt('share URL', shareLastURL); }
+        resetSoon();
+        return;
+      }
+      let u = '';
+      let failed = null;
+      try {
+        if (typeof window.jdShareURL !== 'function') throw 'n/a';
+        u = await window.jdShareURL();
+      } catch (e) { failed = e; }
+      if (failed !== null || !u) {
+        shareBtn.textContent = failed === null || failed === 'n/a' ? 'share n/a' : 'share failed ' + failed;
+        resetSoon();
+        return;
+      }
+      const id = new URL(u).searchParams.get('s') || '';
+      try {
+        await navigator.clipboard.writeText(u);
+      } catch (e) {
+        prompt('share URL', u); // 클립보드 거부 — URL이라도 보여 준다(저장 자체는 성공)
+      }
+      shareBtn.textContent = 'copied ' + id;
+      resetSoon();
+    });
+  }
 
   window.__jdStats = function () {
     const sorted = [...frameSamples].sort((a, b) => a - b);
