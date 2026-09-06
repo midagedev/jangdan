@@ -38,13 +38,13 @@ var polyPatterns = [numPhases][engine.Steps]uint8{
 // polyOctave — 페이즈별 옥타브(도수 표기 note = octave*7 — 도수 필드는 엔진이 무시).
 var polyOctave = [numPhases]uint8{2, 3, 3, 2}
 
-// 폴리 로컬 파라미터 k(engine/poly.go 표와 같은 순서 — 이 파일은 숫자 k만 안다).
+// 폴리 로컬 파라미터 k(engine/poly.go 표).
 const (
-	polyCutoff  = 0
-	polyAttack  = 3
-	polyRelease = 5
-	polyDetune  = 6
-	polyLevel   = 7
+	polyCutoff  = engine.PolyCutoff
+	polyAttack  = engine.PolyAttack
+	polyRelease = engine.PolyRelease
+	polyDetune  = engine.PolyDetune
+	polyLevel   = engine.PolyLevel
 )
 
 // polyTone — 페이즈별 (컷오프, 어택, 릴리즈, 디튠, 레벨).

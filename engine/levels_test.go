@@ -20,6 +20,7 @@ import "testing"
 // silenceAll — 초기 패턴(genInitialPatterns)을 전부 지운 흰 판. 레벨 단언을 결정적으로
 // 만든다(초기 패턴의 seed 의존 게이트를 배제). New 뒤 직접 호출(테스트는 패키지 내부).
 func silenceAll(e *Engine) {
+	e.Apply(Cmd{Kind: RemoveDevice, A: SlotPoly}) // 폴리 리드(초기 패턴 있음)도 흰 판에서 뺀다
 	for p := 0; p < 2; p++ {
 		for s := 0; s < PatternSlots; s++ {
 			for st := 0; st < Steps; st++ {

@@ -32,6 +32,7 @@ const (
 	KindReverb            // 입력 0 모노 · 출력 0 L, 1 R
 	KindChorus            // 입력 0 모노 · 출력 0 L, 1 R
 	KindMain              // 입력 0 L, 1 R → 엔진 출력(busClamp). 제거 불가
+	KindPoly              // 폴리 리드(poly.go): 입력 없음 · 출력 0 모노. 슬롯 스텝 패턴·로컬 파라미터를 해석한다
 	NumDeviceKinds
 )
 
@@ -64,11 +65,12 @@ var kindPorts = [NumDeviceKinds][2]uint8{
 	KindReverb: {1, 2},
 	KindChorus: {1, 2},
 	KindMain:   {2, 0},
+	KindPoly:   {0, 1},
 }
 
 // kindCap — 종류별 인스턴스 수(Engine이 소유하는 고정 배열 길이).
 var kindCap = [NumDeviceKinds]uint8{
-	KindNone: 0, KindBass: 2, KindDrums: 1, KindFx: 1, KindReverb: 1, KindChorus: 1, KindMain: 1,
+	KindNone: 0, KindBass: 2, KindDrums: 1, KindFx: 1, KindReverb: 1, KindChorus: 1, KindMain: 1, KindPoly: 1,
 }
 
 // cable — 케이블 하나. 표 안에서 dst 슬롯 순으로 정렬돼 있다(같은 dst 안은 삽입 순 — 합산 순서).
@@ -131,11 +133,20 @@ func (r *rack) buildDefault() {
 	r.addDevice(SlotReverb, KindReverb)
 	r.addDevice(SlotChorus, KindChorus)
 	r.addDevice(SlotMain, KindMain)
-	// 드라이 경로
+	r.addDevice(SlotPoly, KindPoly)
+	// 드라이 경로(폴리는 Fx 직결 입력 — 덕킹 대상이 아니다)
 	r.connect(SlotBassA, 0, SlotFx, 0, Unbound, ParamSteps)
 	r.connect(SlotBassB, 0, SlotFx, 0, Unbound, ParamSteps)
 	r.connect(SlotDrums, 0, SlotFx, 1, Unbound, ParamSteps)
+	r.connect(SlotPoly, 0, SlotFx, 1, Unbound, ParamSteps)
 	r.connect(SlotDrums, 1, SlotFx, 2, Unbound, ParamSteps)
+	// 폴리 센드(비결속 — §14.2: 폴리 센드 노브는 UI 라운드에서 케이블 게인에 바인딩)
+	qDly, _ := quantize(0.55)
+	qRev, _ := quantize(0.35)
+	qCho, _ := quantize(0.3)
+	r.connect(SlotPoly, 0, SlotFx, 3, Unbound, qDly)
+	r.connect(SlotPoly, 0, SlotReverb, 0, Unbound, qRev)
+	r.connect(SlotPoly, 0, SlotChorus, 0, Unbound, qCho)
 	// 센드: 파트 8 → 딜레이 입력(Fx 포트 3)·리버브, 베이스 2 → 코러스
 	for p := Part(0); p < NumParts; p++ {
 		s, o := r.partSlot[p], r.partPort[p]

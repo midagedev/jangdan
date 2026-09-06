@@ -75,7 +75,10 @@ type Engine struct {
 	fx    fxChain
 	rev   reverb
 	cho   chorus
+	poly  [1]polySynth
 	rack  rack
+
+	polyHeld [1]bool // 폴리 인스턴스별: 직전 스텝이 게이트였다(타이 판정 — 런타임 상태, 직렬화 안 함)
 }
 
 // New — 유일한 할당 지점. seed에서 초기 패턴을 만들고 기본 파라미터를 적용한다.
@@ -98,7 +101,9 @@ func (e *Engine) Reset(seed uint32) {
 	e.bass[1].init(seed ^ 0x7F4A7C15)
 	e.drums.init(seed ^ 0x3C6EF372)
 	e.fx.init()
+	e.poly[0].init(seed ^ 0x2545F491)
 	e.rack.buildDefault() // 기본 랙(§14.1) — 아래 DefaultParams 적용이 결속 케이블 게인을 채운다
+	e.initDevDefaults(SlotPoly)
 	e.playing = true
 	e.keyRoot = uint8(seed % NumKeys) // 세션 조성은 시드가 고른다(resident도 같은 식 seed%12로 SetKey를 낸다)
 	e.pendingKey = e.keyRoot
@@ -173,6 +178,11 @@ func (e *Engine) genInitialPatterns() {
 	e.drumPat[3][2], e.drumPat[3][10] = StepGate, StepGate
 	if e.rng.next()&1 == 1 {
 		e.drumPat[4][12] = StepGate
+	}
+	// 폴리 리드(SlotPoly) 초기 패턴: 오프비트 8분(2·6·10·14), 옥타브 3 — rng를 소비하지 않는다
+	// (베이스·드럼 초기 패턴 바이트 불변). 레지던트가 페이즈 진입 바에 덮어쓴다(resident/poly.go).
+	for _, st := range [...]int{2, 6, 10, 14} {
+		e.rack.devPat[SlotPoly][st] = bassStep{note: 3 * NumDegrees, flags: StepGate}
 	}
 }
 
@@ -315,11 +325,19 @@ func (e *Engine) Apply(c Cmd) {
 			e.playing = false
 			e.bass[0].noteOff()
 			e.bass[1].noteOff()
+			e.poly[0].allOff()
+			e.polyHeld[0] = false
 		}
 	// 장치 그래프(§14.1, rack.go). 실패(점유·범위 밖·순환·표 가득)는 무동작.
 	case AddDevice:
-		e.rack.addDevice(int(c.A), DeviceKind(c.B))
+		if e.rack.addDevice(int(c.A), DeviceKind(c.B)) {
+			e.initDevDefaults(int(c.A))
+		}
 	case RemoveDevice:
+		if int(c.A) < RackSlots && e.rack.kind[c.A] == KindPoly {
+			e.poly[e.rack.inst[c.A]].allOff() // 빠진 장치가 울리지 않게(재장착 시 조용히 시작)
+			e.polyHeld[e.rack.inst[c.A]] = false
+		}
 		e.rack.removeDevice(int(c.A))
 	case Connect:
 		n, _ := quantize(c.V)
@@ -339,9 +357,66 @@ func (e *Engine) Apply(c Cmd) {
 }
 
 // applyDevParam — 슬롯 로컬 파라미터 k의 저장값을 그 슬롯 장치의 계수로 유도한다(종류별 switch).
-// 로컬 파라미터를 해석하는 종류가 아직 없다(KindPoly가 첫 사용자 — P5-poly).
 func (e *Engine) applyDevParam(slot, k int) {
 	switch e.rack.kind[slot] {
+	case KindPoly:
+		e.poly[e.rack.inst[slot]].setParam(k, float32(e.rack.devParQ[slot][k])/ParamSteps)
+	}
+}
+
+// initDevDefaults — 슬롯에 놓인 장치 종류의 기본 로컬 파라미터를 devParQ에 쓰고 계수를 유도한다
+// (Reset·AddDevice). 로컬 파라미터가 없는 종류는 무동작.
+func (e *Engine) initDevDefaults(slot int) {
+	if slot < 0 || slot >= RackSlots {
+		return
+	}
+	switch e.rack.kind[slot] {
+	case KindPoly:
+		d := DefaultPolyParams()
+		for k := 0; k < PolyParams && k < DevParams; k++ {
+			n, _ := quantize(d[k])
+			e.rack.setDevParam(slot, k, n)
+			e.applyDevParam(slot, k)
+		}
+	}
+}
+
+// polyStep — KindPoly 슬롯의 스텝 처리(§14.2): 게이트 스텝은 그 마디 코드 톤(3 또는 4)을
+// 보이스 0..3에 배정(옥타브 = 패턴 note/7), 남는 보이스는 릴리즈. 게이트 없는 스텝은 전 보이스
+// 릴리즈. 타이(StepGate|StepSlide)는 직전 스텝이 게이트였으면 유지(재트리거 없음), 아니면 게이트.
+func (e *Engine) polyStep(st int) {
+	for s := 0; s < RackSlots; s++ {
+		if e.rack.kind[s] != KindPoly {
+			continue
+		}
+		inst := e.rack.inst[s]
+		p := &e.poly[inst]
+		ps := e.rack.devPat[s][st]
+		if ps.flags&StepGate == 0 {
+			p.allOff()
+			e.polyHeld[inst] = false
+			continue
+		}
+		if ps.flags&StepSlide != 0 && e.polyHeld[inst] {
+			continue // 타이 — 유지
+		}
+		deg, cflags := e.Chord(int(e.bar))
+		seventh := cflags&ChordSeventh != 0
+		n := int(ChordTones(cflags))
+		oct := (ps.note / NumDegrees) * NumDegrees
+		accent := ps.flags&StepAccent != 0
+		for v := 0; v < polyVoices; v++ {
+			if v < n {
+				p.noteOn(v, ResolveNote(e.keyRoot, deg, oct+ChordToneDeg(uint8(v), seventh)), accent)
+			} else {
+				p.noteOff(v)
+			}
+		}
+		e.polyHeld[inst] = true
+		e.flags |= FlagPoly
+		if accent {
+			e.flags |= FlagAccent
+		}
 	}
 }
 
@@ -549,6 +624,7 @@ func (e *Engine) onStep(st int, first bool) {
 			e.flags |= FlagAccent
 		}
 	}
+	e.polyStep(st)
 	for v := 0; v < NumDrums; v++ {
 		part := uint8(BD) + uint8(v)
 		if e.mute&(1<<part) != 0 {
@@ -686,6 +762,8 @@ func (e *Engine) sample() (float32, float32) {
 			r.port[s][0], r.port[s][1] = e.cho.process(in[0])
 		case KindMain:
 			outL, outR = busClamp(in[0]), busClamp(in[1])
+		case KindPoly:
+			r.port[s][0] = e.poly[r.inst[s]].process()
 		}
 	}
 	return outL, outR

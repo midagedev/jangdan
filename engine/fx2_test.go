@@ -30,7 +30,10 @@ import (
 // cacd0efe…abc2a(2026-09-06 사용자 "웻한 트랜스" 기본값: B 리드 옥타브·컷오프·디케이·액센트·레벨 0.85,
 // 리버브 센드 7파트·RevSize/Damp/Mix, 코러스 B, 딜레이 센드 A 0.35·B 1.0, Delay 0.4. FAIL-first: 구 상수로
 // 실패 확인 후 재기준 — 이 커밋에서 바이트에 걸리는 변경은 DefaultParams 하나).
-const p4fx2HashV1 = "cacd0efe01da05cba22e6457900ed70fb74a83bac3d4e61c02c91370f39abc2a"
+// ebb5e1c4…ebaf(2026-09-06 저녁 P5-poly: 기본 랙 슬롯 7에 폴리 리드 — 초기 오프비트 패턴·비결속 센드 4케이블.
+// FAIL-first: 구 상수 cacd0efe로 실패 확인(첫 관측 c29a9e37은 합 ×0.5 시절, 스케일 재핀 뒤 ebb5e1c4). 이 커밋에서
+// 바이트에 걸리는 변경은 폴리 장치 하나 — 그래프 도입(66dbaba)은 해시 불변으로 따로 증명됐다).
+const p4fx2HashV1 = "ebb5e1c457d6cc8ca33d6f80df28452668484bbe13d8a7fdcc3d15148f13ebaf"
 
 // 1. 기본값 해시 불변(재기준) — §13.1: 이 해시가 바뀌면 기본값에서 바이트에 닿는
 //    변경이 섞인 것이다(딜레이 센드 외的一切). native 렌더(cmd/render)·워클릿 wasm
@@ -53,6 +56,7 @@ func TestFx2DefaultHash(t *testing.T) {
 //    건너뛰어진다 — 포트 값을 직접 심어 sumInputs로 단언한다.
 func TestFx2BusBypassBitIdentity(t *testing.T) {
 	e := New(1)
+	e.Apply(Cmd{Kind: RemoveDevice, A: SlotPoly}) // 폴리의 비결속 센드 케이블을 치워 옛 버스 경로만 남긴다
 	for p := Part(0); p < NumParts; p++ {
 		e.SetParam(RevSend(p), 0)
 	}

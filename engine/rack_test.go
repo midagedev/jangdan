@@ -3,7 +3,7 @@
 // | 계약                                   | 단언                                              | FAIL-first |
 // |----------------------------------------|---------------------------------------------------|------------|
 // | 기본 랙 = 옛 고정 체인(바이트)           | TestFx2DefaultHash(fx2_test.go) 상수 불변 cacd0efe… | 그래프 도입 커밋에서 상수를 바꾸지 않고 통과 — 바이트 동일 |
-// | 기본 랙 구성·위상 순서                  | TestRackDefault: 슬롯 7·케이블 28·order 0..6·전부 live(코러스 A 센드 0이라도 B 0.45) | order 비교를 뒤집으면 실패 |
+// | 기본 랙 구성·위상 순서                  | TestRackDefault: 슬롯 8(폴리 포함)·케이블 32·order 0 1 2 7 3 4 5 6·전부 live | order 비교를 뒤집으면 실패 |
 // | AddDevice 정규화                       | TestRackAddRemove: 점유 슬롯·종류 범위 밖·인스턴스 고갈(베이스 3번째) 무동작, 제거 시 닿는 케이블 소멸, Main 제거 불가 | 인스턴스 고갈 검사 제거 시 used 배열 밖 인스턴스로 실패 |
 // | Connect 정규화·순환 거부                | TestRackConnectRules: 자기 자신·포트 범위 밖·빈 슬롯 거부, 중복은 갱신, Fx→Reverb→Fx 순환 거부(표 불변) | 되돌리기 제거 시 nCables가 늘어 실패 |
 // | 케이블 표 가득                          | TestRackConnectRules: 64개째까지 성공·65번째 거부   | 상한 검사 제거 시 인덱스 패닉 |
@@ -19,28 +19,30 @@ import "testing"
 func TestRackDefault(t *testing.T) {
 	e := New(1)
 	r := &e.rack
-	want := [...]DeviceKind{KindBass, KindBass, KindDrums, KindFx, KindReverb, KindChorus, KindMain}
+	want := [...]DeviceKind{KindBass, KindBass, KindDrums, KindFx, KindReverb, KindChorus, KindMain, KindPoly}
 	for s := range want {
 		if e.Kind(s) != want[s] {
 			t.Fatalf("슬롯 %d 종류 %d, want %d", s, e.Kind(s), want[s])
 		}
 	}
-	if e.Kind(7) != KindNone || e.Kind(-1) != KindNone || e.Kind(RackSlots) != KindNone {
+	if e.Kind(8) != KindNone || e.Kind(-1) != KindNone || e.Kind(RackSlots) != KindNone {
 		t.Fatal("빈 슬롯·범위 밖은 KindNone")
 	}
-	// 드라이 4 + 딜레이 센드 8 + 리버브 센드 8 + 코러스 2 + 리턴 6 = 28
-	if e.NumCables() != 28 {
-		t.Fatalf("케이블 %d, want 28", e.NumCables())
+	// 드라이 4 + 딜레이 센드 8 + 리버브 센드 8 + 코러스 2 + 리턴 6 = 28, 폴리(드라이·딜레이·리버브·코러스) 4 = 32
+	if e.NumCables() != 32 {
+		t.Fatalf("케이블 %d, want 32", e.NumCables())
 	}
-	if r.nOrder != 7 {
-		t.Fatalf("order 길이 %d, want 7", r.nOrder)
+	if r.nOrder != 8 {
+		t.Fatalf("order 길이 %d, want 8", r.nOrder)
 	}
-	for i := 0; i < 7; i++ {
-		if int(r.order[i]) != i {
-			t.Fatalf("order[%d] = %d, want %d(옛 고정 체인 순서)", i, r.order[i], i)
+	// Kahn 최소 슬롯 우선: 0 1 2 → Fx(3)는 폴리(7)를 기다린다 → 7이 3 앞에 온다
+	wantOrder := [...]uint8{0, 1, 2, 7, 3, 4, 5, 6}
+	for i := range wantOrder {
+		if r.order[i] != wantOrder[i] {
+			t.Fatalf("order[%d] = %d, want %d", i, r.order[i], wantOrder[i])
 		}
 	}
-	for s := 0; s < 7; s++ {
+	for s := 0; s < 8; s++ {
 		if !r.live[s] {
 			t.Fatalf("기본 랙 슬롯 %d live=false", s)
 		}
@@ -138,8 +140,8 @@ func TestRackConnectRules(t *testing.T) {
 	if r.connect(SlotFx, 0, SlotReverb, 0, Unbound, ParamSteps) {
 		t.Fatal("순환 케이블이 통과")
 	}
-	if e.NumCables() != m || r.nOrder != 7 {
-		t.Fatalf("순환 거부 뒤 표 %d(want %d)·order %d(want 7) — 되돌리기 실패", e.NumCables(), m, r.nOrder)
+	if e.NumCables() != m || r.nOrder != 8 {
+		t.Fatalf("순환 거부 뒤 표 %d(want %d)·order %d(want 8) — 되돌리기 실패", e.NumCables(), m, r.nOrder)
 	}
 	if !r.disconnect(SlotReverb, 0, SlotFx, 3) || r.disconnect(SlotReverb, 0, SlotFx, 3) {
 		t.Fatal("disconnect 1회 참·2회 거짓이어야")
