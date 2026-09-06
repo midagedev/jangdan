@@ -257,7 +257,7 @@ func TestRackStateRoundTrip(t *testing.T) {
 	if a.DevParamQ(11, 2) != 1229 || a.DevParamQ(11, 7) != 0 {
 		t.Fatalf("DeviceParam 저장 %d %d", a.DevParamQ(11, 2), a.DevParamQ(11, 7))
 	}
-	if n, f := a.DevStepAt(11, 3); n != MaxNote || f != StepGate|StepAccent {
+	if n, f := a.DevStepAt(11, 3); n != MaxNote || f != StepGate|StepSlide|StepAccent {
 		t.Fatalf("DeviceStep 정규화 note %d flags %d", n, f)
 	}
 	var buf [StateSize]byte

@@ -371,6 +371,14 @@ func TestCmdRanges(t *testing.T) {
 				}
 			case engine.Drop:
 				// 필드 없음
+			case engine.DeviceStep: // 폴리 리드(poly.go): 슬롯 고정·옥타브 note·게이트/타이/액센트
+				if c.A != engine.SlotPoly || c.B > 15 || c.C > engine.MaxNote || c.D & ^uint8(engine.StepGate|engine.StepSlide|engine.StepAccent) != 0 {
+					t.Fatalf("DeviceStep 범위 밖: %+v", c)
+				}
+			case engine.DeviceParam:
+				if c.A != engine.SlotPoly || c.B >= engine.DevParams || c.V < 0 || c.V > 1 || c.V != c.V {
+					t.Fatalf("DeviceParam 범위 밖: %+v", c)
+				}
 			default:
 				t.Fatalf("레지던트가 내지 않는 Kind %d", c.Kind)
 			}

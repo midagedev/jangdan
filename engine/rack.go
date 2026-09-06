@@ -52,6 +52,7 @@ const (
 	SlotReverb = 4
 	SlotChorus = 5
 	SlotMain   = 6
+	SlotPoly   = 7 // 폴리 리드(KindPoly — P5-poly에서 기본 랙에 놓인다; 레지던트가 이 슬롯에 연주한다)
 )
 
 // kindPorts — 종류별 (입력 수, 출력 수). 정적 데이터(할당 아님).
@@ -477,7 +478,8 @@ func (r *rack) setDevParam(slot, k int, n uint16) bool {
 	return true
 }
 
-// setDevStep — 슬롯 스텝 패턴. step&15, note 클램프, flags 마스킹(게이트·액센트만).
+// setDevStep — 슬롯 스텝 패턴. step&15, note 클램프, flags 마스킹(게이트·슬라이드=타이·액센트).
+// 슬라이드 비트는 장치별 의미(폴리: 게이트 유지 — 재트리거 없음).
 func (r *rack) setDevStep(slot int, step, note, flags uint8) bool {
 	if slot < 0 || slot >= RackSlots {
 		return false
@@ -485,7 +487,7 @@ func (r *rack) setDevStep(slot int, step, note, flags uint8) bool {
 	if note > MaxNote {
 		note = MaxNote
 	}
-	r.devPat[slot][step&(Steps-1)] = bassStep{note: note, flags: flags & (StepGate | StepAccent)}
+	r.devPat[slot][step&(Steps-1)] = bassStep{note: note, flags: flags & (StepGate | StepSlide | StepAccent)}
 	return true
 }
 

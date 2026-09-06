@@ -224,6 +224,9 @@ func (r *Resident) onBar(in Input) {
 			r.emit(engine.Cmd{Kind: engine.BassMode, A: 1, B: m, C: d})
 		}
 	}
+	if phaseEntry { // 폴리 리드 리듬·음색(poly.go) — 화성 잠금과 무관(음은 엔진이 코드 트랙에서 읽는다)
+		r.emitPoly(ph)
+	}
 
 	// 패턴 재생성: 페이즈 진입 또는 마지막 재생성에서 8바.
 	regen := !r.seenPhase || ph != r.lastPhase || in.Bar-r.lastRegenBar >= 8

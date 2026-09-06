@@ -40,7 +40,7 @@ const (
 	Connect      // A=src slot B=dst slot C=srcPort|dstPort<<4 D=bind(ParamID, ≥NumParams=비결속) V=게인(비결속일 때)
 	Disconnect   // A=src slot B=dst slot C=srcPort|dstPort<<4
 	DeviceParam  // A=slot B=k(0..DevParams-1) V=값                     — 장치 로컬 파라미터(양자화 저장; 종류가 해석)
-	DeviceStep   // A=slot B=step C=note(도수 표기 — 옥타브 부분만 쓰는 장치도 있다) D=flags(StepGate|StepAccent) — 장치별 스텝 패턴
+	DeviceStep   // A=slot B=step C=note(도수 표기 — 옥타브 부분만 쓰는 장치도 있다) D=flags(StepGate|StepSlide=타이|StepAccent) — 장치별 스텝 패턴
 	NumCmdKinds
 )
 
