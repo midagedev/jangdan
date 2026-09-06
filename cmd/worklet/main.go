@@ -57,6 +57,18 @@ func jd_block() float64 { return float64(eng.Block()) }
 //export jd_peak
 func jd_peak() float32 { return eng.Peak() }
 
+// jd_level — 직전 블록의 파트별 피크(레벨 미터·라인 LED 원본). p는 engine.Part 순
+// (0..7 = BassA BassB BD SD CH OH CP CY), 범위 밖은 0. 가드는 여기서 한다:
+// engine.Part 변환의 uint8 절단이 p=256을 0(베이스 A)으로 접어버리기 때문이다.
+//
+//export jd_level
+func jd_level(p uint32) float32 {
+	if p >= uint32(engine.NumParts) {
+		return 0
+	}
+	return eng.Level(engine.Part(p))
+}
+
 //export jd_state_ptr
 func jd_state_ptr() *byte { return &state[0] }
 

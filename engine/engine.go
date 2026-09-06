@@ -62,6 +62,11 @@ type Engine struct {
 	// 직전 블록 신호
 	flags uint32
 	peak  float32
+	// 파트별 블록 피크(프리 FX 출력 abs 최대, Part 순 BassA BassB BD SD CH OH CP CY).
+	// Render가 마스터 peak과 같은 자리에서 모은다 — sample의 partOut(베이스)과
+	// drumKit.last(드럼 항)이 샘플별 원본이다. 라인별 LED·VU 미터의 원본.
+	levels  [8]float32
+	partOut [2]float32 // 이번 샘플의 베이스 파트별 출력(sample이 대입 — 레벨 집계용)
 
 	bass  [2]bassVoice
 	drums drumKit
@@ -326,6 +331,14 @@ func (e *Engine) Step() int     { return e.stepIdx }
 func (e *Engine) Bar() uint32   { return e.bar }
 func (e *Engine) Flags() uint32 { return e.flags }
 func (e *Engine) Peak() float32 { return e.peak }
+
+// Level — 직전 Render 블록의 파트별 피크(프리 FX — 파트가 무음이면 0). p ≥ NumParts는 0.
+func (e *Engine) Level(p Part) float32 {
+	if p >= NumParts {
+		return 0
+	}
+	return e.levels[p]
+}
 func (e *Engine) Slot(p Part) uint8 {
 	if p > BassB {
 		return 0
@@ -359,6 +372,9 @@ func (e *Engine) Render(out []float32) {
 	}
 	e.flags = 0 // 블록 신호는 Render가 소유한다(Trigger 명령의 비트는 그 블록 렌더 전에 세워지므로 유지되지 않는다 — 호스트가 패드 lit을 직접 그린다)
 	peak := float32(0)
+	for i := 0; i < int(NumParts); i++ { // 파트 피크도 블록마다 다시 모은다(마스터 peak와 같은 주기)
+		e.levels[i] = 0
+	}
 	for i := 0; i < Block; i++ {
 		if e.playing { // 정지 중에는 위치가 동결되고 보이스·FX 꼬리만 렌더된다
 			if !e.started {
@@ -387,6 +403,19 @@ func (e *Engine) Render(out []float32) {
 		}
 		if a := abs32(r); a > peak {
 			peak = a
+		}
+		// 파트별 피크 — 프리 FX 출력의 abs 최대(마스터 peak과 같은 자리). 드럼 항은
+		// drumKit.last(× acc × level까지 반영된 mix 기여), 베이스는 partOut.
+		if a := abs32(e.partOut[0]); a > e.levels[0] {
+			e.levels[0] = a
+		}
+		if a := abs32(e.partOut[1]); a > e.levels[1] {
+			e.levels[1] = a
+		}
+		for v := 0; v < NumDrums; v++ {
+			if a := abs32(e.drums.last[v]); a > e.levels[2+v] {
+				e.levels[2+v] = a
+			}
 		}
 	}
 	e.peak = peak
@@ -560,10 +589,15 @@ func (e *Engine) arpPeek(p int, st int, idx uint8) uint8 {
 }
 
 // sample — 보이스 합 → FX 체인. 베이스라인에는 드롭 컷오프 부스트(옥타브), FX에는 드롭 드라이브 부스트.
+// 베이스 파트 출력을 partOut에 옆으로 보관한다(레벨 미터 원본 — 호출 순서·합산 식은
+// 그대로라 출력 바이트 불변: b0+b1은 원래의 두 process 결과 덧셈과 같은 연산).
 func (e *Engine) sample() (float32, float32) {
-	b := e.bass[0].process(e.dropEnv) + e.bass[1].process(e.dropEnv)
+	b0 := e.bass[0].process(e.dropEnv)
+	e.partOut[0] = b0
+	b1 := e.bass[1].process(e.dropEnv)
+	e.partOut[1] = b1
 	d, bd := e.drums.process(&e.noise)
-	return e.fx.process(b, d, bd, e.dropEnv)
+	return e.fx.process(b0+b1, d, bd, e.dropEnv)
 }
 
 func abs32(x float32) float32 {

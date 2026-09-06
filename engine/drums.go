@@ -4,6 +4,7 @@
 //	setParam(voice, which int, q float32)  voice 0..5 = BD SD CH OH CP CY, which 0=Level 1=Tune
 //	trigger(voice int, accent bool)     원샷(시퀀서·패드·드롭)
 //	process(noise *xorshift32) (mix, bd float32)   샘플 1개. mix = 6보이스 합(레벨 적용), bd = BD 단독(사이드체인용)
+//	                                               process 후 last[v] = 이번 샘플 v보이스의 mix 기여(레벨 미터 원본)
 //
 // 보이스(docs/impl-plan-2026-09-05.md §2.6):
 //   BD — 브리지드-T 근사: 사인 피치 스윕(시작 f0×3 → f0, 시정수 25ms) + 앰프 지수 디케이
@@ -393,6 +394,7 @@ type drumKit struct {
 	cy    cyVoice
 	metal metalBus
 	rng   xorshift32 // 트리거 시점 추첨(금속 디튠)
+	last  [6]float32 // 직전 샘플 각 보이스의 mix 기여(× acc × level 반영 — engine.Level이 블록 피크로 모은다)
 }
 
 func (d *drumKit) init(seed uint32) {
@@ -505,6 +507,8 @@ func (d *drumKit) trigger(voice int, accent bool) {
 
 // process — 보이스별 고정 슬롯 6회 추첨(활성 여부와 무관) → 금속원 1회 진행 →
 // 각 보이스 원본 × 액센트 × 레벨을 mix에 합산. bd는 BD의 mix 기여와 동일(사이드체인).
+// 각 항을 last[v]에도 남긴다(레벨 미터 원본) — mix에 더하는 피연산자를 변수로 옮겨
+// 더하는 것은 같은 연산·같은 순서라 출력 바이트가 불변이다.
 func (d *drumKit) process(n *xorshift32) (float32, float32) {
 	var w [6]uint32
 	for i := range w {
@@ -513,11 +517,22 @@ func (d *drumKit) process(n *xorshift32) (float32, float32) {
 	m := d.metal.sample(noiseBipolar(w[3]))
 	bd := d.bd.process(noiseBipolar(w[0]))
 	bd = mul32(mul32(bd, d.bd.acc), mul32(0.36, d.bd.level))
+	d.last[0] = bd
 	mix := bd
-	mix = mix + mul32(mul32(d.sd.process(noiseBipolar(w[1])), d.sd.acc), d.sd.level)
-	mix = mix + mul32(mul32(d.ch.process(m), d.ch.acc), d.ch.level)
-	mix = mix + mul32(mul32(d.oh.process(m), d.oh.acc), d.oh.level)
-	mix = mix + mul32(mul32(d.cp.process(noiseBipolar(w[2])), d.cp.acc), d.cp.level)
-	mix = mix + mul32(mul32(d.cy.process(m, noiseBipolar(w[4])), d.cy.acc), d.cy.level)
+	t := mul32(mul32(d.sd.process(noiseBipolar(w[1])), d.sd.acc), d.sd.level)
+	d.last[1] = t
+	mix = mix + t
+	t = mul32(mul32(d.ch.process(m), d.ch.acc), d.ch.level)
+	d.last[2] = t
+	mix = mix + t
+	t = mul32(mul32(d.oh.process(m), d.oh.acc), d.oh.level)
+	d.last[3] = t
+	mix = mix + t
+	t = mul32(mul32(d.cp.process(noiseBipolar(w[2])), d.cp.acc), d.cp.level)
+	d.last[4] = t
+	mix = mix + t
+	t = mul32(mul32(d.cy.process(m, noiseBipolar(w[4])), d.cy.acc), d.cy.level)
+	d.last[5] = t
+	mix = mix + t
 	return mix, bd
 }

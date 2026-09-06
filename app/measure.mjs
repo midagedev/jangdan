@@ -192,6 +192,22 @@ try {
   });
   const caption2Ok = cap2.hidden === false && cap2.text === cap2.want;
 
+  // --- 파트별 레벨 게이트(P3-levels — 계약 ↔ 단언. 원본: engine.Level → jd_level →
+  //     processor tick.levels(4블록 max) → host levelsAccum/levelPeaks(세션 누적)).
+  //   C8 파트별 활동이 host까지 흐른다(라인 LED·VU 미터 원본)
+  //      A19 시작 4초 뒤 levelPeaks[2](BD) > 0.01(초기 패턴 BD = 스텝 0·4·8·12)
+  //      A20 시작 4초 뒤 levelPeaks[0](BassA) > 0.01(초기 패턴 게이트 밀도 0.75)
+  //      A21 8값 전부 유한·비음수(host Number.isFinite 방어가 NaN을 통과시키지 않는다)
+  //   C9 레벨 배선은 프레임당 할당을 만들지 않는다(누적 배열 재사용)
+  //      A22 active 구간 allocPerFrame ≤ 900B/frame(기존 ≈850B 예산 + 여유)
+  //      A23 allocPerFrame !== null(계측 도착 자체)
+  //   FAIL-first(변경 전 host.js — 본 라운드 실측): stats에 levelPeaks가 없어
+  //   length≠8로 A19·A20·A21이 실패한다(levels=FAIL 출력 확인).
+  const levelPeaks = await page.evaluate(() => Array.from(window.__jdStats().levelPeaks ?? []));
+  const levelsOk = levelPeaks.length === 8
+    && levelPeaks.every((v) => Number.isFinite(v) && v >= 0)
+    && levelPeaks[2] > 0.01 && levelPeaks[0] > 0.01;
+
   // --- 호스트 검증 2: cmd → 섀도 param. SetParam MASTER(31) = 0.9 ---
   const paramAt = await page.evaluate(() => window.jd.cmd(0, 31, 0, 0, 0, 0.9, 0)); // MASTER(31) — 레지던트가 움직이지 않는 파라미터(CutoffA는 에너지 곡선이 덮어써 거짓 FAIL)
   const paramMirror = await page.evaluate(() => window.jd.param(31));
@@ -271,6 +287,8 @@ try {
   });
   const stepsSeen = active.steps.filter((s) => s >= 0 && s < 16).length;
   const activeHiddenFrames = active.stats.hiddenFrames - markHidden;
+  // A22·A23 — active 구간 스냅숏의 할당(acc은 Go가 창마다 jd.allocPerFrame로 올린다).
+  const allocOk = active.stats.allocPerFrame != null && active.stats.allocPerFrame <= 900;
 
   // 백그라운드 탭 20초: 다른 페이지를 앞으로 올려 원 탭을 숨기고 카운트를 비교한다.
   await page.evaluate(() => window.jd.markFrames());
@@ -560,6 +578,7 @@ try {
     rafMaxMs: active.stats.rafMaxMs,
     fpsEst: active.stats.fpsEst,
     allocPerFrame: active.stats.allocPerFrame,
+    allocOk,
     activeFrames: active.stats.frames - active.stats.framesMark,
     activeHiddenFrames,
     bgFrames: afterBg.frames - active.stats.frames,
@@ -578,6 +597,9 @@ try {
     // 캡션
     caption2Ok,
     caption2Text: cap2.text,
+    // 파트별 레벨(P3-levels)
+    levelsOk,
+    levelPeaks,
     caption3Ok,
     caption3Text: cap3.text,
     caption3EndsOk,
@@ -659,6 +681,8 @@ try {
     `open=${j.openOk ? 'OK e=' + j.openSharedEntries + ' rep=' + j.openReplayCmds : 'FAIL'} ` +
     `404=${j.open404Ok ? 'OK' : 'FAIL'} cool=${j.coolOk ? 'OK' : 'FAIL'} 413=${j.failSurfacedOk ? 'OK' : 'FAIL'} ` +
     `human=${j.humanLogOk ? '+' + (j.humanAfter - j.humanBefore) : 'FAIL'} ` +
+    `levels=${j.levelsOk ? 'OK' : 'FAIL'}(bd=${j.levelPeaks[2] != null ? j.levelPeaks[2].toFixed(3) : 'n/a'} bassA=${j.levelPeaks[0] != null ? j.levelPeaks[0].toFixed(3) : 'n/a'}) ` +
+    `alloc=${j.allocOk ? (j.allocPerFrame != null ? j.allocPerFrame.toFixed(0) + 'B' : '') : 'FAIL ' + j.allocPerFrame}/frame ` +
     `iosGesture=${j.iosGestureOk ? 'OK' : 'FAIL down=' + JSON.stringify(j.iosDown) + ' up=' + JSON.stringify(j.iosUp)} ` +
     `activeHidden=${j.activeHiddenFrames} telemetry=${telemetryOk ? 'OK ' + flushStatus + ' ' + (j.hostTelemetryEvents ?? 0) + 'ev' : 'FAIL ' + flushStatus + ' file=' + (j.hostTelemetryFile ?? 'none')}`
   );

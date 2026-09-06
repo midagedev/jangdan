@@ -32,7 +32,7 @@ new AudioWorkletNode(ctx, 'jd', {
 
 | worklet → main | 뜻 |
 |---|---|
-| `{t:'tick', block, step, bar, flags, peak, ctxTime, applied, playing}` | 4블록마다. flags는 4블록의 `jd_flags()` 누적 OR, peak는 최댓값, ctxTime은 `currentTime`. applied는 큐에서 적용한 누적 명령 수. `playing`은 `jd_playing()`의 0\|1(트랜스포트) — 필드가 없는 구 워클릿은 호스트가 정지로 해석한다 |
+| `{t:'tick', block, step, bar, flags, peak, ctxTime, applied, playing, levels}` | 4블록마다. flags는 4블록의 `jd_flags()` 누적 OR, peak는 최댓값, ctxTime은 `currentTime`. applied는 큐에서 적용한 누적 명령 수. `playing`은 `jd_playing()`의 0\|1(트랜스포트) — 필드가 없는 구 워클릿은 호스트가 정지로 해석한다. `levels`는 `Float32Array(8)` — 파트별 프리 FX 블록 피크의 4블록 max(engine.Part 순 BassA BassB BD SD CH OH CP CY, `jd_level` 원본 — 라인 LED·VU 미터). `jd_level` 내보출이 없는 구 워클릿은 필드를 싣지 않는다 → 호스트가 0 유지(입력 방어) |
 | `{t:'state', id, bytes, block}` | state:get 응답 |
 | `{t:'state:ack', ok}` | state:set 응답 |
 | `{t:'replay:done'}` | 리플레이 렌더 완료 |
@@ -97,7 +97,10 @@ UI 상태 읽기(`param`·`bassStep`·`drumStep`·`muted`·`slot`·`keyRoot`·`c
 1슬롯 어긋날 수 있다(엔진 설계상 정상).
 
 `tick()`의 flags는 호출 사이 누적 OR이고 읽으면 0으로 리셋한다(Go가 프레임당 1회 읽어도
-94Hz 틱의 사건이 60Hz 프레임에서 새지 않게).
+94Hz 틱의 사건이 60Hz 프레임에서 새지 않게). levels도 같은 수명 — 틱마다 max 누적 후
+`tick()`이 `tickOut.levels`(같은 `Float32Array` 재사용, 프레임당 할당 0)에 복사·리셋한다
+(Go `Tick.Levels`로 흐른다). `__jdStats().levelPeaks`는 소모하지 않는 세션 누적 피크
+(측정·게이트용).
 
 ## 3. 텔레메트리 이벤트 표
 
@@ -201,6 +204,10 @@ state:get 왕복으로 워클릿 파라미터 uint16(=3686)이 **정확히** 일
 **공유 세션 게이트**(§8: id URL 형식·≤120자·무손실 왕복[fnv1a]·쿨다운 재호출·413 표면화·
 새 페이지 열기 재생[sharedEntries·author=2·cmdsSent]·404 → open_failed + 일반 세션 —
 계약↔단언 표는 measure.mjs 주석), 액티브 구간 hiddenFrames 0,
+**파트별 레벨 게이트**(P3-levels: 시작 4초 뒤 `levelPeaks[2]`(BD)·`levelPeaks[0]`(BassA)
+> 0.01, 8값 전부 유한·비음수 — 원본 engine.Level → jd_level → tick.levels → levelPeaks),
+**할당 게이트**(액티브 구간 allocPerFrame ≤ 900B/frame — 기존 ≈850B 예산, 레벨 누적 배열
+재사용으로 프레임당 할당 증가 없음),
 텔레메트리가 app/results에 kind=telemetry로 저장(flush `sent(beacon)`/`sent`,
 `telemetrySent ≥ 1`), console/pageerror 0건(의도적 실패 주입[413·404]이 브라우저 콘솔에
 남기는 자원 오류는 예상 필드 `expected413Console`·`expected404Console`로 분리 계상).
