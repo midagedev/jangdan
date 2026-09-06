@@ -428,3 +428,33 @@ func TestRackRev(t *testing.T) {
 		t.Fatalf("ReadState 뒤 rev 그대로 %d — 상태 복원은 위상 변경이다", prev)
 	}
 }
+
+// 11. 뽑힌 장치는 얼어붙지 않는다 — 위상 순서에서 빠지면 process()를 못 받으므로 릴리즈(allOff)
+// 로는 영영 안 꺼지고, 그 상태로 재장착하면 옛 꼬리에서 이어 울린다. 단일 소유자는
+// engine.go silenceDevice(AddDevice·RemoveDevice 양쪽에서 부른다). 2026-09-07 샘플러 라운드의
+// 게이트가 잡은 결함이고, 폴리에 같은 잠복 결함이 있었다 — 그래서 두 종류를 함께 잰다.
+func TestDeviceRemoveDoesNotFreezeVoices(t *testing.T) {
+	e := New(1)
+	e.Apply(Cmd{Kind: DeviceStep, A: SlotPoly, B: 0, C: 0, D: StepGate})
+	out := make([]float32, 256)
+	for b := 0; b < 20; b++ {
+		e.Render(out)
+	}
+	if !e.poly[0].active() {
+		t.Fatalf("전제 실패 — 제거 전에 폴리가 울리고 있어야 한다")
+	}
+	e.Apply(Cmd{Kind: RemoveDevice, A: SlotPoly})
+	if e.poly[0].active() {
+		t.Fatalf("RemoveDevice 직후에도 폴리 보이스가 살아 있다 — 뽑힌 장치는 process()를 못 받아 영영 안 꺼진다")
+	}
+	// 재장착은 조용히 시작한다.
+	e.Apply(Cmd{Kind: AddDevice, A: SlotPoly, B: uint8(KindPoly)})
+	if e.poly[0].active() {
+		t.Fatalf("재장착한 폴리가 옛 꼬리에서 이어 울린다")
+	}
+	for i := 0; i < polyVoices; i++ {
+		if e.poly[0].voices[i].aenv != 0 || e.poly[0].voices[i].filt.s1 != 0 {
+			t.Fatalf("보이스 %d 상태가 안 지워졌다: aenv=%g s1=%g", i, e.poly[0].voices[i].aenv, e.poly[0].voices[i].filt.s1)
+		}
+	}
+}

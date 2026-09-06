@@ -194,6 +194,17 @@ func (p *polySynth) allOff() {
 	}
 }
 
+// silence — 보이스 상태만 즉시 0으로(계수·파라미터는 유지). 랙에서 뽑히거나 꽂힐 때 리드가
+// 부른다 — sampler.go silence와 같은 이유·같은 계약(뽑힌 장치는 process()를 못 받아 릴리즈가
+// 진행되지 않는다). 래더 상태도 함께 지운다: 재장착 시 옛 필터 상태에서 이어 쓰면 튄다.
+func (p *polySynth) silence() {
+	for i := 0; i < polyVoices; i++ {
+		k := p.voices[i].filt.k // 레조넌스는 setParam이 채운 계수라 보존한다
+		p.voices[i] = polyVoice{}
+		p.voices[i].filt.k = k
+	}
+}
+
 func (p *polySynth) active() bool {
 	for i := 0; i < polyVoices; i++ {
 		if p.voices[i].on {

@@ -76,9 +76,11 @@ type Engine struct {
 	rev   reverb
 	cho   chorus
 	poly  [1]polySynth
+	smp   [1]samplerDev
 	rack  rack
 
 	polyHeld [1]bool // 폴리 인스턴스별: 직전 스텝이 게이트였다(타이 판정 — 런타임 상태, 직렬화 안 함)
+	smpHeld  [1]bool // 샘플러 인스턴스별: 직전 스텝이 게이트였다(타이 판정 — 같은 규칙)
 }
 
 // New — 유일한 할당 지점. seed에서 초기 패턴을 만들고 기본 파라미터를 적용한다.
@@ -102,7 +104,8 @@ func (e *Engine) Reset(seed uint32) {
 	e.drums.init(seed ^ 0x3C6EF372)
 	e.fx.init()
 	e.poly[0].init(seed ^ 0x2545F491)
-	e.rack.buildDefault() // 기본 랙(§14.1) — 아래 DefaultParams 적용이 결속 케이블 게인을 채운다
+	e.smp[0].init(seed ^ 0x1B56C4E9) // 팩은 seed 무관 — 시그니처는 그래프 계약(sampler.go)
+	e.rack.buildDefault()            // 기본 랙(§14.1) — 아래 DefaultParams 적용이 결속 케이블 게인을 채운다
 	e.initDevDefaults(SlotPoly)
 	e.playing = true
 	e.keyRoot = uint8(seed % NumKeys) // 세션 조성은 시드가 고른다(resident도 같은 식 seed%12로 SetKey를 낸다)
@@ -327,17 +330,17 @@ func (e *Engine) Apply(c Cmd) {
 			e.bass[1].noteOff()
 			e.poly[0].allOff()
 			e.polyHeld[0] = false
+			e.smp[0].allOff()
+			e.smpHeld[0] = false
 		}
 	// 장치 그래프(§14.1, rack.go). 실패(점유·범위 밖·순환·표 가득)는 무동작.
 	case AddDevice:
 		if e.rack.addDevice(int(c.A), DeviceKind(c.B)) {
+			e.silenceDevice(int(c.A)) // 재장착은 조용히 시작한다(앞 주인의 보이스가 남아 있을 수 있다)
 			e.initDevDefaults(int(c.A))
 		}
 	case RemoveDevice:
-		if int(c.A) < RackSlots && e.rack.kind[c.A] == KindPoly {
-			e.poly[e.rack.inst[c.A]].allOff() // 빠진 장치가 울리지 않게(재장착 시 조용히 시작)
-			e.polyHeld[e.rack.inst[c.A]] = false
-		}
+		e.silenceDevice(int(c.A))
 		e.rack.removeDevice(int(c.A))
 	case Connect:
 		n, _ := quantize(c.V)
@@ -356,11 +359,32 @@ func (e *Engine) Apply(c Cmd) {
 	}
 }
 
+// silenceDevice — 슬롯 장치의 보이스 상태를 즉시 0으로. **뽑기·꽂기의 단일 소유자**다.
+// 뽑힌 장치는 위상 순서에서 빠져 process()를 못 받으므로 릴리즈(allOff)로는 영영 안 꺼지고,
+// 그 상태로 재장착하면 옛 꼬리에서 이어 울린다(2026-09-07 샘플러 게이트가 잡은 결함 —
+// 폴리에도 같은 잠복 결함이 있었다). 계수·devParQ는 건드리지 않는다.
+func (e *Engine) silenceDevice(slot int) {
+	if slot < 0 || slot >= RackSlots {
+		return
+	}
+	inst := e.rack.inst[slot]
+	switch e.rack.kind[slot] {
+	case KindPoly:
+		e.poly[inst].silence()
+		e.polyHeld[inst] = false
+	case KindSampler:
+		e.smp[inst].silence()
+		e.smpHeld[inst] = false
+	}
+}
+
 // applyDevParam — 슬롯 로컬 파라미터 k의 저장값을 그 슬롯 장치의 계수로 유도한다(종류별 switch).
 func (e *Engine) applyDevParam(slot, k int) {
 	switch e.rack.kind[slot] {
 	case KindPoly:
 		e.poly[e.rack.inst[slot]].setParam(k, float32(e.rack.devParQ[slot][k])/ParamSteps)
+	case KindSampler:
+		e.smp[e.rack.inst[slot]].setParam(k, float32(e.rack.devParQ[slot][k])/ParamSteps)
 	}
 }
 
@@ -377,6 +401,44 @@ func (e *Engine) initDevDefaults(slot int) {
 			n, _ := quantize(d[k])
 			e.rack.setDevParam(slot, k, n)
 			e.applyDevParam(slot, k)
+		}
+	case KindSampler:
+		d := DefaultSamplerParams()
+		for k := 0; k < SmpParams && k < DevParams; k++ {
+			n, _ := quantize(d[k])
+			e.rack.setDevParam(slot, k, n)
+			e.applyDevParam(slot, k)
+		}
+	}
+}
+
+// samplerStep — KindSampler 슬롯의 스텝 처리. 게이트 스텝은 그 마디 코드 위에서 패턴 도수를
+// 해석해(ResolveNote — 베이스와 같은 규칙) 원샷 하나를 쏘고, 게이트 없는 스텝은 noteOff를 보낸다.
+// noteOff는 장치가 해석한다: 원샷은 무시하고 끝까지 울리고, 루프 모드 보이스만 릴리즈로 들어간다
+// (sampler.go 계약). 타이(StepGate|StepSlide)는 직전 스텝이 게이트였으면 재트리거하지 않는다 —
+// 루프 모드에서 한 음을 길게 끄는 수단이고, 원샷에서는 연타를 막는다.
+func (e *Engine) samplerStep(st int) {
+	for s := 0; s < RackSlots; s++ {
+		if e.rack.kind[s] != KindSampler {
+			continue
+		}
+		inst := e.rack.inst[s]
+		sm := &e.smp[inst]
+		ps := e.rack.devPat[s][st]
+		if ps.flags&StepGate == 0 {
+			sm.noteOff()
+			e.smpHeld[inst] = false
+			continue
+		}
+		if ps.flags&StepSlide != 0 && e.smpHeld[inst] {
+			continue // 타이 — 유지(재트리거 없음)
+		}
+		deg, _ := e.Chord(int(e.bar))
+		accent := ps.flags&StepAccent != 0
+		sm.noteOn(ResolveNote(e.keyRoot, deg, ps.note), accent)
+		e.smpHeld[inst] = true
+		if accent {
+			e.flags |= FlagAccent
 		}
 	}
 }
@@ -625,6 +687,7 @@ func (e *Engine) onStep(st int, first bool) {
 		}
 	}
 	e.polyStep(st)
+	e.samplerStep(st)
 	for v := 0; v < NumDrums; v++ {
 		part := uint8(BD) + uint8(v)
 		if e.mute&(1<<part) != 0 {
@@ -764,6 +827,8 @@ func (e *Engine) sample() (float32, float32) {
 			outL, outR = busClamp(in[0]), busClamp(in[1])
 		case KindPoly:
 			r.port[s][0] = e.poly[r.inst[s]].process()
+		case KindSampler:
+			r.port[s][0] = e.smp[r.inst[s]].process()
 		}
 	}
 	return outL, outR

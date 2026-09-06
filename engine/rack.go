@@ -25,14 +25,15 @@ package engine
 type DeviceKind uint8
 
 const (
-	KindNone   DeviceKind = iota
-	KindBass              // 출력 0: 보이스 × 채널 레벨(BassALevel/BassBLevel). 인스턴스 0/1 = 파트 BassA/BassB
-	KindDrums             // 출력 0 mix, 1 BD(사이드체인), 2..7 보이스별(BD SD CH OH CP CY — 레벨 반영)
-	KindFx                // 입력 0 덕킹 대상(베이스), 1 직결(드럼), 2 사이드체인 트리거, 3 딜레이 센드 합 · 출력 0 L, 1 R
-	KindReverb            // 입력 0 모노 · 출력 0 L, 1 R
-	KindChorus            // 입력 0 모노 · 출력 0 L, 1 R
-	KindMain              // 입력 0 L, 1 R → 엔진 출력(busClamp). 제거 불가
-	KindPoly              // 폴리 리드(poly.go): 입력 없음 · 출력 0 모노. 슬롯 스텝 패턴·로컬 파라미터를 해석한다
+	KindNone    DeviceKind = iota
+	KindBass               // 출력 0: 보이스 × 채널 레벨(BassALevel/BassBLevel). 인스턴스 0/1 = 파트 BassA/BassB
+	KindDrums              // 출력 0 mix, 1 BD(사이드체인), 2..7 보이스별(BD SD CH OH CP CY — 레벨 반영)
+	KindFx                 // 입력 0 덕킹 대상(베이스), 1 직결(드럼), 2 사이드체인 트리거, 3 딜레이 센드 합 · 출력 0 L, 1 R
+	KindReverb             // 입력 0 모노 · 출력 0 L, 1 R
+	KindChorus             // 입력 0 모노 · 출력 0 L, 1 R
+	KindMain               // 입력 0 L, 1 R → 엔진 출력(busClamp). 제거 불가
+	KindPoly               // 폴리 리드(poly.go): 입력 없음 · 출력 0 모노. 슬롯 스텝 패턴·로컬 파라미터를 해석한다
+	KindSampler            // 샘플러(sampler.go): 입력 없음 · 출력 0 모노. 내장 팩(samplerpack.go) 재생 — 슬롯 스텝 패턴·로컬 파라미터
 	NumDeviceKinds
 )
 
@@ -58,19 +59,20 @@ const (
 
 // kindPorts — 종류별 (입력 수, 출력 수). 정적 데이터(할당 아님).
 var kindPorts = [NumDeviceKinds][2]uint8{
-	KindNone:   {0, 0},
-	KindBass:   {0, 1},
-	KindDrums:  {0, 8},
-	KindFx:     {4, 2},
-	KindReverb: {1, 2},
-	KindChorus: {1, 2},
-	KindMain:   {2, 0},
-	KindPoly:   {0, 1},
+	KindNone:    {0, 0},
+	KindBass:    {0, 1},
+	KindDrums:   {0, 8},
+	KindFx:      {4, 2},
+	KindReverb:  {1, 2},
+	KindChorus:  {1, 2},
+	KindMain:    {2, 0},
+	KindPoly:    {0, 1},
+	KindSampler: {0, 1},
 }
 
 // kindCap — 종류별 인스턴스 수(Engine이 소유하는 고정 배열 길이).
 var kindCap = [NumDeviceKinds]uint8{
-	KindNone: 0, KindBass: 2, KindDrums: 1, KindFx: 1, KindReverb: 1, KindChorus: 1, KindMain: 1, KindPoly: 1,
+	KindNone: 0, KindBass: 2, KindDrums: 1, KindFx: 1, KindReverb: 1, KindChorus: 1, KindMain: 1, KindPoly: 1, KindSampler: 1,
 }
 
 // cable — 케이블 하나. 표 안에서 dst 슬롯 순으로 정렬돼 있다(같은 dst 안은 삽입 순 — 합산 순서).
