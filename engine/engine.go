@@ -438,6 +438,7 @@ func (e *Engine) samplerStep(st int) {
 		accent := ps.flags&StepAccent != 0
 		sm.noteOn(ResolveNote(e.keyRoot, deg, ps.note), accent)
 		e.smpHeld[inst] = true
+		e.flags |= FlagSampler
 		if accent {
 			e.flags |= FlagAccent
 		}

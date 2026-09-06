@@ -67,9 +67,10 @@ type Cmd struct {
 
 // Flags() 비트(직전 Render 블록에서 일어난 일).
 const (
-	FlagBar    uint32 = 1 << 8  // 바 경계(스텝 0 진입)
-	FlagDrop   uint32 = 1 << 9  // 드롭 발동
-	FlagAccent uint32 = 1 << 10 // 액센트 노트 트리거
-	FlagPoly   uint32 = 1 << 11 // 폴리 리드(KindPoly) 코드 트리거(타이 제외)
+	FlagBar     uint32 = 1 << 8  // 바 경계(스텝 0 진입)
+	FlagDrop    uint32 = 1 << 9  // 드롭 발동
+	FlagAccent  uint32 = 1 << 10 // 액센트 노트 트리거
+	FlagPoly    uint32 = 1 << 11 // 폴리 리드(KindPoly) 코드 트리거(타이 제외)
+	FlagSampler uint32 = 1 << 12 // 샘플러(KindSampler) 원샷 트리거(타이 제외)
 	// bit 0..7 = 해당 Part 트리거
 )
