@@ -104,6 +104,11 @@ type rack struct {
 
 	port [RackSlots][MaxOutPorts]float32 // 이번 샘플의 출력 포트 값
 
+	// rev — 위상 리비전. recompute가 돌 때마다 1 증가한다(장치 추가·제거·연결·해제·
+	// 상태 읽기). UI(뒷면 케이블 뷰)가 케이블 표를 다시 읽어야 하는지의 유일한 판정 —
+	// 프레임마다 64케이블을 되읽지 않게 한다. 런타임 값이라 직렬화하지 않는다(재생 무관).
+	rev uint32
+
 	// 파트 → (슬롯, 포트) — 레벨 미터·센드 원본. slot 0xFF = 그 파트의 장치가 없다.
 	partSlot [NumParts]uint8
 	partPort [NumParts]uint8
@@ -114,9 +119,11 @@ type rack struct {
 	devPat  [RackSlots][Steps]bassStep
 }
 
-// reset — 빈 랙.
+// reset — 빈 랙. rev는 이어 간다(리셋도 UI에게는 위상 변경이다 — 되감으면 뷰가 갱신을 놓친다).
 func (r *rack) reset() {
+	rev := r.rev
 	*r = rack{}
+	r.rev = rev + 1
 	for p := range r.partSlot {
 		r.partSlot[p] = 0xFF
 	}
@@ -348,6 +355,7 @@ func (r *rack) refreshParts() {
 // recompute — 케이블 구간·live·위상 순서를 다시 만든다. 순환이면 false(order는 부분).
 // Kahn: 준비된 슬롯 중 번호가 가장 작은 것부터(결정론·기본 랙 순서 = 옛 고정 체인 순서).
 func (r *rack) recompute() bool {
+	r.rev++
 	// 구간
 	for s := 0; s < RackSlots; s++ {
 		r.cStart[s], r.cEnd[s] = 0, 0
@@ -468,6 +476,10 @@ func (e *Engine) Cable(i int) (src, sp, dst, dp uint8, gain float32, bind ParamI
 	c := &e.rack.cables[i]
 	return c.src, c.sp, c.dst, c.dp, c.gain, c.bind, true
 }
+
+// RackRev — 위상 리비전(장치·케이블이 바뀔 때마다 증가). 뒷면 뷰는 이 값이 변할 때만
+// 케이블 표를 다시 읽는다. 값 자체에 의미는 없고 "달라졌는가"만 본다(랩어라운드 무해).
+func (e *Engine) RackRev() uint32 { return e.rack.rev }
 
 // KindPorts — 종류의 (입력 수, 출력 수). 범위 밖은 0,0.
 func KindPorts(k DeviceKind) (in, out uint8) {

@@ -15,6 +15,9 @@ func (nopBridge) Tick() Tick                               { return Tick{} }
 func (nopBridge) Scope([]byte) bool                        { return false }
 func (nopBridge) Param(engine.ParamID) float32             { return 0 }
 func (nopBridge) DevParam(int, int) float32                { return -1 }
+func (nopBridge) RackRev() uint32                          { return 0 }
+func (nopBridge) RackKind(int) engine.DeviceKind           { return engine.KindNone }
+func (nopBridge) Cables([]RackCable) int                   { return 0 }
 func (nopBridge) BassStep(engine.Part, int) (uint8, uint8) { return 0, 0 }
 func (nopBridge) DrumStep(engine.Part, int) uint8          { return 0 }
 func (nopBridge) Muted(engine.Part) bool                   { return false }

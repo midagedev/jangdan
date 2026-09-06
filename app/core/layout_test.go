@@ -211,3 +211,68 @@ func TestDevParamDefault(t *testing.T) {
 		}
 	}
 }
+
+// TestRearLayoutPorts — 뒷면 잭 표(§14.3)와 엔진 포트 표의 일치. 이 둘이 어긋나면 케이블이
+// 없는 잭에 꽂히거나(연결 무동작) 있는 포트가 화면에서 사라진다 — 어느 쪽도 화면만 보고는
+// 원인을 못 찾는다. 기본 랙 슬롯의 종류로 검사한다(rear.json은 기본 랙 기준 상한이다).
+func TestRearLayoutPorts(t *testing.T) {
+	l, err := LoadRearLayout(assets.DeviceRearJSON)
+	if err != nil {
+		t.Fatalf("rear.json 파싱: %v", err)
+	}
+	dl, err := LoadDeviceLayout(assets.DeviceLayoutJSON)
+	if err != nil {
+		t.Fatalf("layout.json 파싱: %v", err)
+	}
+	if l.Size != dl.Size {
+		t.Fatalf("뒷면 크기 %v ≠ 앞면 %v — 좌표계가 하나여야 스크롤 규칙이 하나다", l.Size, dl.Size)
+	}
+	e := engine.New(1)
+	seen := map[int]bool{}
+	for i := range l.Devices {
+		d := &l.Devices[i]
+		if seen[d.Slot] {
+			t.Fatalf("슬롯 %d 행이 둘", d.Slot)
+		}
+		seen[d.Slot] = true
+		nIn, nOut := engine.KindPorts(e.Kind(d.Slot))
+		if len(d.In) != int(nIn) || len(d.Out) != int(nOut) {
+			t.Errorf("슬롯 %d(%s) 잭 in %d out %d, 엔진 포트 in %d out %d",
+				d.Slot, d.Name, len(d.In), len(d.Out), nIn, nOut)
+		}
+		for _, j := range append(append([]Jack{}, d.In...), d.Out...) {
+			if j.R < 12 {
+				t.Errorf("슬롯 %d 잭 %s 반지름 %v < 12(히트 28px 하한)", d.Slot, j.Name, j.R)
+			}
+			if !d.Rect.Contains(j.CX-j.R, j.CY-j.R) || !d.Rect.Contains(j.CX+j.R, j.CY+j.R) {
+				t.Errorf("슬롯 %d 잭 %s(%v,%v)가 행 %v 밖", d.Slot, j.Name, j.CX, j.CY, d.Rect)
+			}
+		}
+	}
+	// 기본 랙의 장치가 전부 뒷면에 있어야 한다(케이블 양 끝이 그려질 자리가 있다는 뜻).
+	for s := 0; s < engine.RackSlots; s++ {
+		if e.Kind(s) != engine.KindNone && l.RearDeviceAt(s) == nil {
+			t.Errorf("슬롯 %d(종류 %d)의 뒷면 행 없음", s, e.Kind(s))
+		}
+	}
+	// 잭 히트 영역(r+4)이 서로 겹치지 않는다 — 겹치면 드래그가 엉뚱한 포트에 꽂힌다.
+	type hit struct {
+		x, y, r float64
+		who     string
+	}
+	var hits []hit
+	for i := range l.Devices {
+		d := &l.Devices[i]
+		for _, j := range append(append([]Jack{}, d.In...), d.Out...) {
+			hits = append(hits, hit{j.CX, j.CY, j.R + 4, d.Name + "/" + j.Name})
+		}
+	}
+	for i := 0; i < len(hits); i++ {
+		for k := i + 1; k < len(hits); k++ {
+			dx, dy := hits[i].x-hits[k].x, hits[i].y-hits[k].y
+			if dx*dx+dy*dy < (hits[i].r+hits[k].r)*(hits[i].r+hits[k].r) {
+				t.Errorf("잭 히트 겹침: %s ↔ %s", hits[i].who, hits[k].who)
+			}
+		}
+	}
+}

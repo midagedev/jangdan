@@ -140,6 +140,69 @@ func LoadDeviceLayout(b []byte) (*DeviceLayout, error) {
 	return &l, nil
 }
 
+// RearLayout — 랙 뒷면(§14.3, tools/rack/rear.py 산출). 앞면과 같은 좌표계(720×2000)라
+// 스크롤 규칙이 하나다. 잭 좌표의 단일 소유자는 이 JSON이고, 포트 수는 engine kindPorts의
+// 전사다(게이트 TestRearLayoutPorts가 두 표의 일치를 잰다).
+type RearLayout struct {
+	Size    [2]float64   `json:"size"`
+	Panels  []Named      `json:"panels"`
+	Plates  []For        `json:"plates"`
+	Devices []RearDevice `json:"devices"`
+}
+
+// RearDevice — 뒷면 행 하나 = 장치 하나. Slot은 기본 랙의 슬롯 번호이고, 그 슬롯에 다른
+// 종류가 놓이면 뷰는 실제 포트 수까지만 그린다(레이아웃이 상한).
+type RearDevice struct {
+	Slot  int    `json:"slot"`
+	Name  string `json:"name"`
+	Rect  Rect   `json:"rect"`
+	Plate Rect   `json:"plate"`
+	In    []Jack `json:"in"`
+	Out   []Jack `json:"out"`
+}
+
+// Jack — 잭 하나. Name은 앱이 폰트로 올리는 포트 라벨(engine/rack.go 포트 주석 전사).
+type Jack struct {
+	Name   string  `json:"name"`
+	Port   int     `json:"port"`
+	CX, CY float64 `json:"-"`
+	R      float64 `json:"r"`
+}
+
+// UnmarshalJSON — cx/cy 두 필드(Knob과 같은 사정).
+func (j *Jack) UnmarshalJSON(b []byte) error {
+	var raw struct {
+		Name string  `json:"name"`
+		Port int     `json:"port"`
+		CX   float64 `json:"cx"`
+		CY   float64 `json:"cy"`
+		R    float64 `json:"r"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	*j = Jack{Name: raw.Name, Port: raw.Port, CX: raw.CX, CY: raw.CY, R: raw.R}
+	return nil
+}
+
+func LoadRearLayout(b []byte) (*RearLayout, error) {
+	var l RearLayout
+	if err := json.Unmarshal(b, &l); err != nil {
+		return nil, err
+	}
+	return &l, nil
+}
+
+// RearDeviceAt — 슬롯의 뒷면 행. 없으면 nil.
+func (l *RearLayout) RearDeviceAt(slot int) *RearDevice {
+	for i := range l.Devices {
+		if l.Devices[i].Slot == slot {
+			return &l.Devices[i]
+		}
+	}
+	return nil
+}
+
 func LoadRoomLayout(b []byte) (*RoomLayout, error) {
 	var l RoomLayout
 	if err := json.Unmarshal(b, &l); err != nil {

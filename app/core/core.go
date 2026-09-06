@@ -54,6 +54,11 @@ type Bridge interface {
 	Scope(dst []byte) bool           // 파형 256 Float32 = 1024바이트(리틀엔디언) 복사
 	Param(id engine.ParamID) float32 // 호스트가 미러링한 현재 파라미터 값(레지던트·리플레이 반영)
 	DevParam(slot, k int) float32    // 장치 로컬 파라미터 미러 값(§14.1 DeviceParam; 폴리 리드 노브) — 미러 부재 시 음수
+	// 랙 위상(§14.3 뒷면 케이블 뷰). RackRev가 달라졌을 때만 Cables를 다시 부른다 —
+	// 프레임마다 케이블 64줄을 JS로 되읽지 않기 위한 계약이다(값 자체는 무의미, 변화만 본다).
+	RackRev() uint32
+	RackKind(slot int) engine.DeviceKind // 슬롯의 장치 종류(범위 밖·미러 부재는 KindNone)
+	Cables(dst []RackCable) int          // 케이블 표를 dst에 복사(최대 len(dst)) — 복사 수 반환, 무할당
 	BassStep(p engine.Part, step int) (note, flags uint8)
 	DrumStep(p engine.Part, step int) uint8
 	Muted(p engine.Part) bool
@@ -72,6 +77,15 @@ type Bridge interface {
 	Frame(ms float64)                      // 계측: Update 시작~Draw 끝
 	FirstFrame()
 	AllocPerFrame(bytes float64)
+}
+
+// RackCable — 뒷면 뷰가 보는 케이블 한 줄(engine.Cable의 UI 사본). Bind는 결속
+// 파라미터 ID이고 engine.Unbound(= NumParams)면 비결속 — 게인의 정본이 gainQ라는 뜻이다.
+type RackCable struct {
+	Src, SP uint8
+	Dst, DP uint8
+	Bind    uint8
+	Gain    float32
 }
 
 // Ctx — 프레임마다 뷰에 넘기는 공용 상태. main.go가 채우고 뷰는 읽기만(Cmd는 Bridge 경유).

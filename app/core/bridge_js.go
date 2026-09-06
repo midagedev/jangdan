@@ -71,6 +71,42 @@ func (j *jsBridge) Tick() Tick {
 	return tk
 }
 
+// RackRev / RackKind / Cables — 랙 위상(§14.3). Cables는 케이블당 JS 호출 2회라
+// 비싸다 — 뷰가 RackRev 변화에서만 부른다는 계약이 이 비용의 상한이다.
+func (j *jsBridge) RackRev() uint32 { return uint32(intOf(j.b.Call("rackRev"))) }
+
+func (j *jsBridge) RackKind(slot int) engine.DeviceKind {
+	k := intOf(j.b.Call("rackKind", slot))
+	if k < 0 || k >= int(engine.NumDeviceKinds) {
+		return engine.KindNone
+	}
+	return engine.DeviceKind(k)
+}
+
+func (j *jsBridge) Cables(dst []RackCable) int {
+	n := intOf(j.b.Call("numCables"))
+	if n > len(dst) {
+		n = len(dst)
+	}
+	out := 0
+	for i := 0; i < n; i++ {
+		w := intOf(j.b.Call("cable", i))
+		if w < 0 { // 0xFFFFFFFF(없음) — intOf가 −1로 준다
+			continue
+		}
+		dst[out] = RackCable{
+			Src:  uint8(w & 0xF),
+			SP:   uint8((w >> 4) & 0xF),
+			Dst:  uint8((w >> 8) & 0xF),
+			DP:   uint8((w >> 12) & 0xF),
+			Bind: uint8((w >> 16) & 0x3F),
+			Gain: float32(floatOf(j.b.Call("cableGain", i))),
+		}
+		out++
+	}
+	return out
+}
+
 func (j *jsBridge) KeyRoot() int { return intOf(j.b.Call("keyRoot")) }
 
 func (j *jsBridge) Chord(bar int) (uint8, uint8) {

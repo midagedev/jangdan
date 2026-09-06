@@ -129,6 +129,39 @@ type fakeBridge struct {
 	mode      [2][2]uint8                // [mode, dir] — 파트 A/B
 	now       float64
 	tick      core.Tick
+
+	// 랙 위상 미러(§14.3) — 진짜 엔진 한 벌이다. 호스트의 섀도 엔진과 같은 방식으로
+	// AddDevice/RemoveDevice/Connect/Disconnect를 그대로 적용하므로, 뒷면 뷰가 보낸
+	// 명령이 케이블 표에 어떻게 반영되는지를 테스트가 실제 규칙(순환 거부·표 가득)으로 잰다.
+	rackEng *engine.Engine
+}
+
+// rack — 지연 생성 미러 엔진(기본 랙). New(1)의 시드는 위상과 무관하다.
+func (f *fakeBridge) rack() *engine.Engine {
+	if f.rackEng == nil {
+		f.rackEng = engine.New(1)
+	}
+	return f.rackEng
+}
+
+func (f *fakeBridge) RackRev() uint32 { return f.rack().RackRev() }
+
+func (f *fakeBridge) RackKind(slot int) engine.DeviceKind { return f.rack().Kind(slot) }
+
+func (f *fakeBridge) Cables(dst []core.RackCable) int {
+	e := f.rack()
+	n := e.NumCables()
+	if n > len(dst) {
+		n = len(dst)
+	}
+	for i := 0; i < n; i++ {
+		src, sp, d, dp, g, bind, ok := e.Cable(i)
+		if !ok {
+			return i
+		}
+		dst[i] = core.RackCable{Src: src, SP: sp, Dst: d, DP: dp, Bind: uint8(bind), Gain: g}
+	}
+	return n
 }
 
 type recCmd struct {
@@ -184,6 +217,8 @@ func (f *fakeBridge) Hint(int) {}
 func (f *fakeBridge) Cmd(c engine.Cmd, a core.Author) {
 	f.cmds = append(f.cmds, recCmd{c, f.now, a})
 	switch c.Kind {
+	case engine.AddDevice, engine.RemoveDevice, engine.Connect, engine.Disconnect:
+		f.rack().Apply(c) // 위상 명령은 미러 엔진이 규칙대로 처리한다(뷰가 되읽는 표가 진짜다)
 	case engine.SetParam:
 		if c.A < uint8(engine.NumParams) {
 			f.params[c.A] = c.V

@@ -381,3 +381,50 @@ func TestRackLevelsAfterRemove(t *testing.T) {
 		t.Fatal("드럼 레벨이 사라짐")
 	}
 }
+
+// TestRackRev — 위상 리비전(§14.3): 뒷면 뷰가 "케이블 표를 다시 읽어야 하는가"를 이 값
+// 하나로 판정한다. 계약은 둘뿐이다 — 위상을 바꾸는 명령은 반드시 값을 바꾸고(놓치면 뷰가
+// 옛 배선을 그린다), 위상을 바꾸지 않는 명령은 바꾸지 않는다(매 프레임 64케이블 되읽기 방지).
+// 거부된 연결(순환)도 시도 자체가 recompute를 태우므로 값이 바뀔 수 있다 — 단언하지 않는다.
+func TestRackRev(t *testing.T) {
+	e := New(1)
+	r0 := e.RackRev()
+
+	e.Apply(Cmd{Kind: SetParam, A: uint8(CutoffA), V: 0.3})
+	e.Apply(Cmd{Kind: DeviceParam, A: SlotPoly, B: 0, V: 0.7})
+	buf := make([]float32, 2*Block)
+	e.Render(buf)
+	if e.RackRev() != r0 {
+		t.Fatalf("파라미터·렌더가 rev를 움직임: %d → %d", r0, e.RackRev())
+	}
+
+	steps := []struct {
+		name string
+		c    Cmd
+	}{
+		{"Disconnect", Cmd{Kind: Disconnect, A: SlotPoly, B: SlotChorus, C: 0}},
+		{"Connect", Cmd{Kind: Connect, A: SlotPoly, B: SlotChorus, C: 0, D: uint8(NumParams), V: 0.5}},
+		{"RemoveDevice", Cmd{Kind: RemoveDevice, A: SlotPoly}},
+		{"AddDevice", Cmd{Kind: AddDevice, A: SlotPoly, B: uint8(KindPoly)}},
+	}
+	prev := e.RackRev()
+	for _, s := range steps {
+		e.Apply(s.c)
+		if e.RackRev() == prev {
+			t.Fatalf("%s 뒤 rev 그대로 %d", s.name, prev)
+		}
+		prev = e.RackRev()
+	}
+
+	var st [StateSize]byte
+	e.WriteState(st[:])
+	if e.RackRev() != prev {
+		t.Fatalf("WriteState가 rev를 움직임")
+	}
+	if !e.ReadState(st[:]) {
+		t.Fatal("ReadState 실패")
+	}
+	if e.RackRev() == prev {
+		t.Fatalf("ReadState 뒤 rev 그대로 %d — 상태 복원은 위상 변경이다", prev)
+	}
+}

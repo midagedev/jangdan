@@ -80,6 +80,47 @@ func jd_devparam(slot, k uint32) float32 {
 	return float32(eng.DevParamQ(int(slot), int(k))) / engine.ParamSteps
 }
 
+// 랙 위상 읽기(§14.3 뒷면 케이블 뷰). 케이블 표는 리비전이 바뀔 때만 다시 읽는다 —
+// jd_rack_rev가 그 판정이고, 나머지 셋은 그때만 도는 루프의 원소다.
+//
+//export jd_rack_rev
+func jd_rack_rev() uint32 { return eng.RackRev() }
+
+// jd_rack_kind — 슬롯의 장치 종류(engine.DeviceKind). 범위 밖은 0(KindNone).
+//
+//export jd_rack_kind
+func jd_rack_kind(slot uint32) uint32 {
+	if slot >= engine.RackSlots {
+		return 0
+	}
+	return uint32(eng.Kind(int(slot)))
+}
+
+//export jd_rack_ncables
+func jd_rack_ncables() uint32 { return uint32(eng.NumCables()) }
+
+// jd_rack_cable — i번째 케이블의 위상을 한 워드에 담는다:
+// src | sp<<4 | dst<<8 | dp<<12 | bind<<16. 범위 밖은 0xFFFFFFFF(없음 — src 0xF는
+// 유효 슬롯이 아니므로 값으로도 구분된다). 게인은 jd_rack_gain이 따로 준다.
+//
+//export jd_rack_cable
+func jd_rack_cable(i uint32) uint32 {
+	src, sp, dst, dp, _, bind, ok := eng.Cable(int(i))
+	if !ok {
+		return 0xFFFFFFFF
+	}
+	return uint32(src) | uint32(sp)<<4 | uint32(dst)<<8 | uint32(dp)<<12 | uint32(bind)<<16
+}
+
+//export jd_rack_gain
+func jd_rack_gain(i uint32) float32 {
+	_, _, _, _, g, _, ok := eng.Cable(int(i))
+	if !ok {
+		return 0
+	}
+	return g
+}
+
 //export jd_state_ptr
 func jd_state_ptr() *byte { return &state[0] }
 

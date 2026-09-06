@@ -16,6 +16,11 @@ import _ "embed"
 //go:embed device/layout.json
 var DeviceLayoutJSON []byte
 
+// DeviceRearJSON — 뒷면 잭 좌표(§14.3, tools/rack/rear.py 산출). 앞면과 같은 좌표계다.
+//
+//go:embed device/rear.json
+var DeviceRearJSON []byte
+
 //go:embed room/layout.json
 var RoomLayoutJSON []byte
 
@@ -29,6 +34,7 @@ var FontAtlasJSON []byte
 // build.sh가 app/web/assets/ 아래로 복사한다).
 var Names = []string{
 	"device/panel.png",
+	"device/rear.png",
 	"device/sprites/knob-r25.png",
 	"device/sprites/knob-r32.png",
 	"device/sprites/knob-r42.png",
