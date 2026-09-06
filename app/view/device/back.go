@@ -41,7 +41,11 @@ const (
 	cableAK        = 0.55
 	cableAMax      = 0.9
 	cableASteps    = 8   // 알파 양자화 단계 — 색 그룹 키(그룹당 스트로크 1회)
-	maxCableGroups = 16  // 색 그룹 상한(초과분은 마지막 그룹에 합친다)
+	// 색 그룹 상한 = 케이블 수 상한. 그룹 묶기는 스트로크 호출을 줄이는 최적화일 뿐이므로,
+	// 상한이 모자라면 색이 조용히 틀어진다(초과분이 남의 색으로 그려진다). 기본 랙 32케이블이
+	// 이미 16그룹을 정확히 채우는 것을 실측해(TestCableGroupCount) 상한을 케이블 수로 올렸다 —
+	// 최악이 케이블당 스트로크 1회, 즉 묶기가 없던 것과 같다.
+	maxCableGroups = engine.RackCables
 	dragCableA     = 0.9 // 드래그 중 케이블 알파(양자화 밖 — 단독 스트로크)
 	rejDur         = 0.5 // 거부 피드백 표시 시간(초)
 	rejDecay       = 6.0 // 거부 링 감쇠율(/초) — draw.go polyTrigA와 같은 e^(−k·t) 방식
@@ -53,10 +57,24 @@ const rearGuide = "REAR - DRAG OUT TO IN - TAP A NAME PLATE TO RETURN"
 // colReject — 순환 거부 잭 링(이 라운드가 새로 만드는 유일한 색 — 알파는 그릴 때 곱한다).
 var colReject = color.NRGBA{0xE0, 0x50, 0x40, 0xFF}
 
-// slotBand — 케이블 색 = src 슬롯의 앞면 섹션 밴드(colPlateBand 인덱스). 기본 랙 배치의
-// 전사: bassA 0 · bassB 1 · drums 2 · fx 3 · main 4(믹서) · reverb·chorus 5(fx2) · poly 6.
-// 빈 슬롯·기본 랙 밖은 3(fx 밴드).
-var slotBand = [engine.RackSlots]uint8{0, 1, 2, 3, 5, 5, 4, 6, 3, 3, 3, 3, 3, 3, 3, 3}
+// colCable — 케이블 색 = 그 케이블이 나오는 슬롯의 **뒷면 섹션 색 띠**. 값은 채택 패널
+// (rear.png, 시드 1234)의 띠 내부 중앙값 실측이다(2026-09-06) — 새 색 발명이 아니라 그림
+// 복원이다. 처음 스펙은 colPlateBand(이름판 밴드)를 지정했는데 그 표는 베이스·드럼·Fx가
+// 전부 크림색이라 네 종류의 케이블이 한 색으로 뭉쳤다(대표컷 실측 — 리드 스펙 오류).
+// 색은 "이 줄이 어디서 나오는가"의 유일한 단서라 구분이 곧 기능이다.
+// 인덱스는 슬롯 번호 그대로. 기본 랙 밖(8..15)은 Fx 색.
+var colCable = [engine.RackSlots]color.NRGBA{
+	{170, 60, 47, 0xFF},   // 0 bassA
+	{77, 99, 129, 0xFF},   // 1 bassB
+	{193, 127, 64, 0xFF},  // 2 drums
+	{112, 143, 116, 0xFF}, // 3 fx
+	{97, 86, 129, 0xFF},   // 4 reverb
+	{99, 88, 131, 0xFF},   // 5 chorus
+	{131, 91, 141, 0xFF},  // 6 main
+	{72, 121, 138, 0xFF},  // 7 poly
+	{112, 143, 116, 0xFF}, {112, 143, 116, 0xFF}, {112, 143, 116, 0xFF}, {112, 143, 116, 0xFF},
+	{112, 143, 116, 0xFF}, {112, 143, 116, 0xFF}, {112, 143, 116, 0xFF}, {112, 143, 116, 0xFF},
+}
 
 // jackDrag — 진행 중인 케이블 드래그. fromIn=false: 출력 잭에서 새 케이블 늘리기,
 // fromIn=true: 입력 잭에 꽂힌 기존 케이블(src는 그 케이블의 출력 쪽, dst는 옛 도착지)을
@@ -81,7 +99,7 @@ type pendConn struct {
 // cableGroup — 같은 (밴드, 알파 단계) 케이블의 스트로크 묶음. vector.Path를 재사용해
 // 그리기 비용을 색 그룹 수로 묶는다(Reset은 용량을 남긴다 — 프레임 간 재활용).
 type cableGroup struct {
-	band  uint8
+	band  uint8 // src 슬롯 번호(colCable 인덱스)
 	aStep uint8
 	path  vector.Path
 }
@@ -320,7 +338,7 @@ func appendCable(p *vector.Path, x1, y1, x2, y2 float64) {
 }
 
 // drawCables — 케이블 표 → 베지어(§14.3 게이트: 그려진 수 == 표의 수). 색 = src 슬롯
-// 밴드(colPlateBand), 알파 = 0.35+0.55·게인을 8단계 양자화 — (밴드, 단계)를 그룹 키로
+// 색(colCable — src 슬롯), 알파 = 0.35+0.55·게인을 8단계 양자화 — (슬롯, 단계)를 그룹 키로
 // 묶어 그룹당 StrokePath 1회(경로 재사용). 어느 한쪽 잭이 레이아웃·실제 포트 수에 없으면
 // 그리지도 rearDraws에 세지도 않는다. 그룹 상한 초과분은 마지막 그룹에 합친다.
 func (v *View) drawCables(dst *ebiten.Image, ctx *core.Ctx) {
@@ -341,7 +359,7 @@ func (v *View) drawCables(dst *ebiten.Image, ctx *core.Ctx) {
 		if j1 == nil || j2 == nil {
 			continue
 		}
-		band := slotBand[c.Src]
+		band := c.Src
 		a := cableA0 + cableAK*float64(c.Gain)
 		if a < cableA0 {
 			a = cableA0
@@ -372,7 +390,7 @@ func (v *View) drawCables(dst *ebiten.Image, ctx *core.Ctx) {
 	for gi := 0; gi < n; gi++ {
 		g := &v.cableGroups[gi]
 		q := (float64(g.aStep) + 0.5) / cableASteps // 단계 중심값
-		c := colPlateBand[g.band]
+		c := colCable[g.band]
 		v.cableDrawOpts.ColorScale.Reset()
 		v.cableDrawOpts.ColorScale.ScaleWithColor(color.NRGBA{c.R, c.G, c.B, uint8(q*255 + 0.5)})
 		vector.StrokePath(dst, &g.path, &v.cableStrokeOpts, &v.cableDrawOpts)
@@ -392,7 +410,7 @@ func (v *View) drawDragCable(dst *ebiten.Image, b core.Bridge) {
 	}
 	v.dragPath.Reset()
 	appendCable(&v.dragPath, j.CX, j.CY, v.jackDrag.x, v.jackDrag.y+v.scrollY)
-	c := colPlateBand[slotBand[v.jackDrag.srcSlot]]
+	c := colCable[v.jackDrag.srcSlot]
 	v.cableDrawOpts.ColorScale.Reset()
 	v.cableDrawOpts.ColorScale.ScaleWithColor(color.NRGBA{c.R, c.G, c.B, uint8(dragCableA*255 + 0.5)})
 	vector.StrokePath(dst, &v.dragPath, &v.cableStrokeOpts, &v.cableDrawOpts)

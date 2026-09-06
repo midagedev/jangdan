@@ -399,3 +399,31 @@ func TestRearUpdateNoAlloc(t *testing.T) {
 	}
 	h.ctx.Pointers = nil
 }
+
+// TestCableGroupCount — 케이블 색 그룹 수가 상한 안인가. 상한이 모자라면 초과분이 남의
+// 색으로 그려지는데 화면에는 그냥 '색이 이상한 케이블'로만 보인다(원인 추적이 어렵다).
+// 실측 2026-09-06: 기본 랙 32케이블이 16그룹 — 옛 상한 16을 정확히 채웠다. 상한을
+// RackCables로 올린 근거가 이 수치다.
+func TestCableGroupCount(t *testing.T) {
+	var f fakeBridge
+	var cs [64]core.RackCable
+	n := f.Cables(cs[:])
+	seen := map[[2]uint8]bool{}
+	for i := 0; i < n; i++ {
+		a := cableA0 + cableAK*float64(cs[i].Gain)
+		if a < cableA0 {
+			a = cableA0
+		} else if a > cableAMax {
+			a = cableAMax
+		}
+		st := uint8(a * cableASteps)
+		if st >= cableASteps {
+			st = cableASteps - 1
+		}
+		seen[[2]uint8{cs[i].Src, st}] = true
+	}
+	t.Logf("기본 랙 케이블 %d개 → 색 그룹 %d개(상한 %d)", n, len(seen), maxCableGroups)
+	if len(seen) > maxCableGroups {
+		t.Fatalf("그룹 %d > 상한 %d — 초과분이 마지막 그룹 색으로 그려진다", len(seen), maxCableGroups)
+	}
+}
