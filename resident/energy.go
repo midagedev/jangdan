@@ -22,7 +22,7 @@ var (
 	resoBand    = [numPhases]phaseBand{{0.3, 0.5}, {0.5, 0.7}, {0.6, 0.8}, {0.4, 0.6}}
 	envmodTgt   = [numPhases]float32{0.3, 0.5, 0.7, 0.4} // ±0.1 지터
 	driveTgt    = [numPhases]float32{0.1, 0.3, 0.5, 0.15}
-	delayTgt    = [numPhases]float32{0.2, 0.3, 0.4, 0.5}
+	delayTgt    = [numPhases]float32{0.3, 0.38, 0.45, 0.55} // 리드 딜레이(사용자 2026-09-06 웻한 트랜스) — 구 {0.2,0.3,0.4,0.5}
 	chDensity   = [numPhases]float32{0.3, 0.6, 0.9, 0.2}    // CH 게이트 확률(생성기가 사용)
 	phaseEnergy = [numPhases]float32{0.325, 0.55, 0.8, 0.4} // 각 페이즈 컷오프 대역 중심
 )

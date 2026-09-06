@@ -104,37 +104,48 @@ func DefaultParams() [NumParams]float32 {
 		p[base+BWave] = 0.0 // 톱니
 		p[base+BOct] = 0.5  // 0옥타브
 	}
-	p[BassBParams+BCutoff] = 0.35
-	p[BassBParams+BOct] = 0.2 // B는 한 옥타브 아래
+	// B 파트는 리드(사용자 2026-09-06 "기본 재생에 그럴싸한 리드 신스가 없다 — 리드에 딜레이, 전체에
+	// 리버브 살짝, 웻한 트랜스"): 한 옥타브 위·열린 컷오프·긴 디케이. 레지던트의 B 모드(ARP/CHORD)가
+	// 코드 트랙을 연주하는 파트라 리드 자리에 맞다. A는 베이스로 남는다.
+	p[BassBParams+BCutoff] = 0.6
+	p[BassBParams+BOct] = 0.85 // B는 한 옥타브 위(≥ 2/3 → +1)
+	p[BassBParams+BDecay] = 0.65
+	p[BassBParams+BAccent] = 0.45
 	for v := 0; v < NumDrums; v++ {
 		p[DrumParams+ParamID(2*v)] = 0.8   // Level
 		p[DrumParams+ParamID(2*v)+1] = 0.5 // Tune
 	}
-	p[Delay] = 0.25
+	p[Delay] = 0.4 // 리드 딜레이 리턴(레지던트가 페이즈 대역으로 갱신 — resident/energy.go delayTgt)
 	p[Drive] = 0.2
 	p[Comp] = 0.4
 	p[Master] = 0.8
 	p[Tempo] = 0.5 // 130 BPM
-	// §13.1 — 믹서·버스. 센드는 전부 0으로 시작해야 한다(위 루프가 0.5를 깔았으니
-	// 명시적으로 0으로 덮는다). 센드 0인 버스는 바이패스 = 기본 출력 바이트 불변의 근거.
+	// §13.1 — 믹서·버스 기본값 = "살짝 웻한 트랜스"(사용자 2026-09-06). 리버브는 전체에 조금(BD 제외),
+	// 리드(B)는 딜레이 100%·코러스, 베이스(A)는 딜레이 조금. 센드가 하나라도 >0이면 버스가 켜지므로
+	// 기본 출력 바이트가 바뀐다 — 기본값 해시는 fx2_test.go 상수로 재기준(변경마다 1회).
 	p[BassALevel] = 1
-	p[BassBLevel] = 1
+	p[BassBLevel] = 0.85
 	for pt := Part(0); pt < NumParts; pt++ {
 		p[RevSend(pt)] = 0
 		p[DelaySend(pt)] = 0
 	}
-	p[RevSize] = 0.5
-	p[RevDamp] = 0.5
-	p[RevMix] = 0.5
+	p[RevSend(BassA)] = 0.1
+	p[RevSend(BassB)] = 0.4
+	p[RevSend(SD)] = 0.3
+	p[RevSend(CH)] = 0.15
+	p[RevSend(OH)] = 0.25
+	p[RevSend(CP)] = 0.35
+	p[RevSend(CY)] = 0.3
+	p[RevSize] = 0.6
+	p[RevDamp] = 0.55
+	p[RevMix] = 0.45
 	p[ChoSendA] = 0
-	p[ChoSendB] = 0
-	p[ChoRate] = 0.4
-	p[ChoDepth] = 0.5
+	p[ChoSendB] = 0.45
+	p[ChoRate] = 0.35
+	p[ChoDepth] = 0.4
 	p[ChoMix] = 0.5
-	// 딜레이 센드(§13.1): 리드 신트는 기본으로 딜레이에 연결, 드럼은 아니다.
-	// 이 항목만 기본 출력 바이트를 바꾼다(해시 재기준 대상).
-	p[DelaySend(BassA)] = 1
-	p[DelaySend(BassB)] = 0.6
+	p[DelaySend(BassA)] = 0.35
+	p[DelaySend(BassB)] = 1
 	return p
 }
 

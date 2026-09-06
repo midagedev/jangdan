@@ -19,7 +19,7 @@
 //	라벨 = 도수 로마자(+7)·입력 방어 deg%7    | TestChordLabels: "iv"/"iv7"/deg 10→"iv", 값 불변 시 재구성 0
 //	B 표시창 탭 → 모드 순환 5단계             | TestBassModeCycle: (1,0)→(1,1)→(1,2)→(2,0)→(0,0) 전체 순서,
 //	                                        |   nextBassMode(7,9) 범위 밖 정규화
-//	B 표시창: 노브 값 2초 → 모드 문자열       | TestBassModeDisplayWindow: "CUT 35"→2초 후 "BASS" 복귀
+//	B 표시창: 노브 값 2초 → 모드 문자열       | TestBassModeDisplayWindow: "CUT <기본값×99>"→2초 후 "BASS" 복귀
 //	하단 = "Am 120 B3 BUILD" 포맷            | TestBottomDisplay: 키·BPM·마디·페이즈 전부 + MANUAL 치환
 //	정상 상태 Update 힙 할당 0                | TestUpdateSteadyNoAlloc: AllocsPerRun 200프레임 == 0,
 //	                                        |   TestChordLabels/TestDisplayCache의 재구성 카운터
@@ -74,6 +74,7 @@
 package device
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -428,7 +429,8 @@ func TestDrag(t *testing.T) {
 
 func TestTapSweep(t *testing.T) {
 	h := newHarness(t)
-	k := knobAt(h.v, secBassB, "CUTOFF") // 기본값 0.35 → 피크 0.85
+	k := knobAt(h.v, secBassB, "CUTOFF") // 피크 = clamp01(기본값 + 0.5) — 기본값은 엔진 표에서 읽는다(2026-09-06 리드 기본값 변경 후 하드코딩 폐기)
+	wantPeak := clamp01(engine.DefaultParams()[engine.CutoffB] + 0.5)
 	h.frame(ptrPress(-1, k.cx, k.cy))
 	h.frame(ptrRel(-1, k.cx, k.cy)) // 이동 0, 눌림 1프레임 → 탭
 	h.fb.cmds = nil
@@ -448,8 +450,8 @@ func TestTapSweep(t *testing.T) {
 			maxI = i
 		}
 	}
-	if math.Abs(float64(sp[maxI].c.V)-0.85) > 0.02 {
-		t.Fatalf("피크 %v(0.85 근사 예상)", sp[maxI].c.V)
+	if math.Abs(float64(sp[maxI].c.V-wantPeak)) > 0.02 {
+		t.Fatalf("피크 %v(%v 근사 예상)", sp[maxI].c.V, wantPeak)
 	}
 	for i := 1; i < maxI; i++ {
 		if sp[i].c.V < sp[i-1].c.V-1e-6 {
@@ -461,11 +463,12 @@ func TestTapSweep(t *testing.T) {
 			t.Fatalf("복귀 구간 비단조 @%d", i)
 		}
 	}
-	if math.Abs(float64(sp[len(sp)-1].c.V)-0.35) > 1.0/4095 {
-		t.Fatalf("최종 송신값 %v(시작값 0.35 ±1/4095 예상)", sp[len(sp)-1].c.V)
+	base := engine.DefaultParams()[engine.CutoffB]
+	if math.Abs(float64(sp[len(sp)-1].c.V-base)) > 1.0/4095 {
+		t.Fatalf("최종 송신값 %v(시작값 %v ±1/4095 예상)", sp[len(sp)-1].c.V, base)
 	}
-	if math.Abs(float64(h.fb.params[k.id])-0.35) > 1.0/4095 {
-		t.Fatalf("미러 최종값 %v(0.35 ±1/4095 예상)", h.fb.params[k.id])
+	if math.Abs(float64(h.fb.params[k.id]-base)) > 1.0/4095 {
+		t.Fatalf("미러 최종값 %v(%v ±1/4095 예상)", h.fb.params[k.id], base)
 	}
 	if k.swActive {
 		t.Fatal("스윕이 아직 활성")
@@ -485,10 +488,14 @@ func TestButtonMapping(t *testing.T) {
 	if c, _ := lastCmd(h); c.V != 1 {
 		t.Fatalf("sqr → %+v", c)
 	}
-	// oct 3단(basslineB, 기본 0.5).
+	// oct 3단(basslineB, 기본 0.85 = +1옥타브 리드 — 2026-09-06): oct- → 0.5 → 0.15 → 0.15 유지.
+	pressButton(h, btnAt(h.v, secBassB, "oct-"))
+	if c, _ := lastCmd(h); c.V != 0.5 {
+		t.Fatalf("oct- → %+v(0.5 예상)", c)
+	}
 	pressButton(h, btnAt(h.v, secBassB, "oct-"))
 	if c, _ := lastCmd(h); c.V != 0.15 {
-		t.Fatalf("oct- → %+v(0.15 예상)", c)
+		t.Fatalf("oct- 2회 → %+v(0.15 예상)", c)
 	}
 	pressButton(h, btnAt(h.v, secBassB, "oct-")) // 하단 유지
 	if c, _ := lastCmd(h); c.V != 0.15 {
@@ -942,16 +949,17 @@ func TestBassModeDisplayWindow(t *testing.T) {
 	if got := h.v.disp[1].text; got != "BASS" {
 		t.Fatalf("초기 B 표시창 %q(BASS 예상)", got)
 	}
-	// B 섹션 노브 접촉 → 값 표시(CUTOFF 기본 0.35 → "CUT 35").
+	// B 섹션 노브 접촉 → 값 표시(CUTOFF 기본값 × 99 반올림 — 기본값은 엔진 표에서).
 	k := knobAt(h.v, secBassB, "CUTOFF")
+	wantCut := fmt.Sprintf("CUT %d", int32(engine.DefaultParams()[engine.CutoffB]*99+0.5))
 	h.frame(ptrPress(-1, k.cx, k.cy))
-	if got := h.v.disp[1].text; got != "CUT 35" {
-		t.Fatalf("노브 접촉 직후 B 표시창 %q(CUT 35 예상)", got)
+	if got := h.v.disp[1].text; got != wantCut {
+		t.Fatalf("노브 접촉 직후 B 표시창 %q(%s 예상)", got, wantCut)
 	}
 	// 1초 유지(값 불변) — 여전히 값.
 	h.hold(-1, k.cx, k.cy, 60)
-	if got := h.v.disp[1].text; got != "CUT 35" {
-		t.Fatalf("1초 후 B 표시창 %q(CUT 35 유지 예상)", got)
+	if got := h.v.disp[1].text; got != wantCut {
+		t.Fatalf("1초 후 B 표시창 %q(%s 유지 예상)", got, wantCut)
 	}
 	// 2초 경과 — 모드 문자열 복귀(값이 안 움직이면 knobT가 이어붙지 않는다).
 	h.hold(-1, k.cx, k.cy, 150)
