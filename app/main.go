@@ -12,13 +12,13 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 
-	"github.com/midagedev/revirth/app/assets"
-	"github.com/midagedev/revirth/app/core"
-	"github.com/midagedev/revirth/app/view/device"
-	"github.com/midagedev/revirth/app/view/room"
-	"github.com/midagedev/revirth/engine"
-	"github.com/midagedev/revirth/resident"
-	"github.com/midagedev/revirth/session"
+	"github.com/midagedev/jangdan/app/assets"
+	"github.com/midagedev/jangdan/app/core"
+	"github.com/midagedev/jangdan/app/view/device"
+	"github.com/midagedev/jangdan/app/view/room"
+	"github.com/midagedev/jangdan/engine"
+	"github.com/midagedev/jangdan/resident"
+	"github.com/midagedev/jangdan/session"
 )
 
 type mode uint8

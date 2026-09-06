@@ -10,8 +10,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/midagedev/revirth/app/core"
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/app/core"
+	"github.com/midagedev/jangdan/engine"
 )
 
 // — 계약↔단언: vu 매핑(−36..0dB → 0..1, 입력 방어) —

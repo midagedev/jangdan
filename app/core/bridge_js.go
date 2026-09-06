@@ -19,7 +19,7 @@ package core
 import (
 	"syscall/js"
 
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/engine"
 )
 
 type jsBridge struct {

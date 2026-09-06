@@ -4,7 +4,7 @@
 // export 표의 원본: docs/impl-plan-2026-09-05.md §3. 이 파일에는 곱셈-덧셈이 없다.
 package main
 
-import "github.com/midagedev/revirth/engine"
+import "github.com/midagedev/jangdan/engine"
 
 var eng engine.Engine // 정적 할당 — New 대신 Reset으로 초기화(-gc=leaking에서 재할당 없음)
 var out [2 * engine.Block]float32

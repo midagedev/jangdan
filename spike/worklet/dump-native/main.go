@@ -10,7 +10,7 @@ import (
 	"math"
 	"os"
 
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/engine"
 )
 
 func main() {

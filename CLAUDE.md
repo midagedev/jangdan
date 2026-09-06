@@ -1,8 +1,8 @@
-# revirth — 프로젝트 규칙
+# 장단 / Jangdan — 프로젝트 규칙
 
-코드네임 revirth(공개 문구 금지 — ReBirth와 철자 하나 차이). 제품명 **장단 / Jangdan**, 주 도메인 후보 jangdan.fm — 근거와 남은 확인은 `docs/naming-2026-09-05.md`. 브라우저에서 돌아가는 액시드 신스 + 노동요 오토파일럿.
+제품명 **장단 / Jangdan**(초기 코드네임은 ReBirth 상표와 철자 하나 차이라 2026-09-06 폐기 — 디렉터리·모듈 경로·문서 어디에도 남기지 않는다), 주 도메인 후보 jangdan.fm — 근거와 남은 확인은 `docs/naming-2026-09-05.md`. 브라우저에서 돌아가는 액시드 신스 + 노동요 오토파일럿.
 **스택은 전부 Go**(사용자 결정 2026-09-05, 워클릿 스파이크 통과 후): 엔진 `engine/`(TinyGo → AudioWorklet), UI·방 Ebitengine(Go wasm), 서버·스트림 호스트 Go. Rust·TS UI 전환은 논의 종료 — 재론은 새 실측이 있을 때만.
-**공개 레포** https://github.com/midagedev/jangdan (2026-09-05 공개, MIT 코드 + `ASSETS-LICENSE` 자산 고지). 로컬 디렉터리 이름 revirth는 코드네임이라 공개 문구·레포 이름에 쓰지 않는다. 배포: `bash tools/deploy-pages.sh` → gh-pages → https://midagedev.github.io/jangdan/ (worklet/ 계측, app/ 기기 뷰). Pages는 사전압축을 못 해 로더가 `app.wasm.gz`를 DecompressionStream으로 푼다. 공개 레포이므로 커밋 전 키·인증서·results·scratch가 gitignore에 있는지 확인(`git ls-files | grep -E 'app\.wasm|\.cert|results/|scratch/'` 가 비어야 한다).
+**공개 레포** https://github.com/midagedev/jangdan (2026-09-05 공개, MIT 코드 + `ASSETS-LICENSE` 자산 고지). 로컬 디렉터리는 `~/repo/jangdan`, 모듈 경로 `github.com/midagedev/jangdan`. 배포: `bash tools/deploy-pages.sh` → gh-pages → https://midagedev.github.io/jangdan/ (worklet/ 계측, app/ 기기 뷰). Pages는 사전압축을 못 해 로더가 `app.wasm.gz`를 DecompressionStream으로 푼다. 공개 레포이므로 커밋 전 키·인증서·results·scratch가 gitignore에 있는지 확인(`git ls-files | grep -E 'app\.wasm|\.cert|results/|scratch/'` 가 비어야 한다).
 기획서: https://claude.ai/code/artifact/1cc5ab85-bbab-4d8f-90ca-5a9856a02195 · 조사 노트 `docs/research-2026-09-05.md` · 교차 리뷰 `docs/reviews/`.
 
 ## 이미지 생성 — fal.ai

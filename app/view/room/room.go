@@ -21,9 +21,9 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 
-	"github.com/midagedev/revirth/app/assets"
-	"github.com/midagedev/revirth/app/core"
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/app/assets"
+	"github.com/midagedev/jangdan/app/core"
+	"github.com/midagedev/jangdan/engine"
 )
 
 // 스펙 수치(§8·§12~§14·§18). 색은 스펙 hex와 layout.palette만.

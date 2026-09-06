@@ -51,9 +51,9 @@ import (
 	"math"
 	"testing"
 
-	"github.com/midagedev/revirth/app/assets"
-	"github.com/midagedev/revirth/app/core"
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/app/assets"
+	"github.com/midagedev/jangdan/app/core"
+	"github.com/midagedev/jangdan/engine"
 )
 
 // fakeBridge — 기록형 브리지: 보낸 Cmd(시각 포함)와 파라미터·스텝·뮤트·화성 미러.

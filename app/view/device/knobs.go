@@ -8,8 +8,8 @@ import (
 	"math"
 	"strings"
 
-	"github.com/midagedev/revirth/app/core"
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/app/core"
+	"github.com/midagedev/jangdan/engine"
 )
 
 // knob — 레이아웃 노브 하나의 정적 기하 + 실행 상태.

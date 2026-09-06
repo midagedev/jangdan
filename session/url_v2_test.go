@@ -25,7 +25,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/engine"
 )
 
 // v2Log — 새 Kind 4종이 섞인 로그. 스텝 겹침 방지: 블록 간격 60 > 스텝당 43.3블록(130BPM).

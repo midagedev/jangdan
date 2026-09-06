@@ -17,7 +17,7 @@ package resident
 import (
 	"testing"
 
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/engine"
 )
 
 // specProgressions — §12.4 진행표(도수, 마이너).

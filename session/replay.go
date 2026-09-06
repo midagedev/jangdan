@@ -2,7 +2,7 @@
 // "새 엔진 + 같은 로그 = 같은 소리" 계약(docs/impl-plan-2026-09-05.md §1)의 실행측.
 package session
 
-import "github.com/midagedev/revirth/engine"
+import "github.com/midagedev/jangdan/engine"
 
 // Replay — 블록 로그 재생. ResetPos 후 블록 0..upToBlock-1을 렌더하며, 각 블록 렌더
 // 시작 전에 그 블록에 도달한(Block <= b인 아직 적용 안 된) Cmd를 Apply한다. 정렬된

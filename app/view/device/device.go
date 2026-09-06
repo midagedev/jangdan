@@ -20,9 +20,9 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 	_ "image/png" // 패널·스프라이트 디코드
 
-	"github.com/midagedev/revirth/app/assets"
-	"github.com/midagedev/revirth/app/core"
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/app/assets"
+	"github.com/midagedev/jangdan/app/core"
+	"github.com/midagedev/jangdan/engine"
 )
 
 // 수치 계약(스펙 origin). 픽셀 좌표는 여기에 없다 — 레이아웃 JSON이 소유한다.

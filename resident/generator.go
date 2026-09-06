@@ -13,7 +13,7 @@
 // CHORD = 스텝 0·8·12 스탭. 드럼은 킥 골격(0·4·8·12 필수) 위에 시드 변주를 얹는다.
 package resident
 
-import "github.com/midagedev/revirth/engine"
+import "github.com/midagedev/jangdan/engine"
 
 // patStep — 베이스 패턴 한 스텝(도수 note = octave*7+degree, 0..MaxNote; flags = Gate|Slide|Accent).
 type patStep struct {

@@ -11,7 +11,7 @@
 //   - AddKeyframe도 블록 단조를 지킨다(마지막 키프레임 블록으로 클램프).
 package session
 
-import "github.com/midagedev/revirth/engine"
+import "github.com/midagedev/jangdan/engine"
 
 // Author — 로그 엔트리의 저자. 값 자체가 직렬화 의미 계약이다(0..3).
 type Author uint8

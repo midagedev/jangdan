@@ -1,17 +1,17 @@
-# Project overlay — revirth (장단 / Jangdan)
+# Project overlay — 장단 / Jangdan
 
-레포 루트 `/Users/hckim/repo/revirth`. 공개 레포(https://github.com/midagedev/jangdan)이므로
-코드 주석·문서·문자열에 코드네임 "revirth"를 **새로 쓰지 않는다**(모듈 경로
-`github.com/midagedev/revirth`는 예외 — 이미 존재하는 import 경로). 금지어(주석·문자열
+레포 루트 `/Users/hckim/repo/jangdan`. 공개 레포(https://github.com/midagedev/jangdan)이므로
+코드 주석·문서·문자열에 초기 코드네임(ReBirth와 철자 하나 차이인 그 단어)을 **쓰지 않는다** — 2026-09-06
+디렉터리·모듈 경로(`github.com/midagedev/jangdan`)까지 전부 교체됐다. 금지어(주석·문자열
 포함): Roland, TB-303, TR-808, TR-909, ReBirth, Winamp, Lofi Girl.
 
 ## 게이트 레시피 (리드가 재실행하는 것과 같은 명령)
 
 - 엔진 유닛: `go test ./engine/ -count=1`
-- 엔진 FMA: `bash /Users/hckim/repo/revirth/tools/check-fma.sh` (FMADD/FMSUB 0개, exit 0)
+- 엔진 FMA: `bash /Users/hckim/repo/jangdan/tools/check-fma.sh` (FMADD/FMSUB 0개, exit 0)
 - 엔진 vet: `go vet ./engine/`
-- TinyGo 워클릿 빌드: `bash /Users/hckim/repo/revirth/spike/worklet/build.sh` (wasm-unknown, import 0)
-- 앱 빌드(브라우저 wasm): `bash /Users/hckim/repo/revirth/app/build.sh`; 데스크톱 타입체크 `go vet ./app/...`
+- TinyGo 워클릿 빌드: `bash /Users/hckim/repo/jangdan/spike/worklet/build.sh` (wasm-unknown, import 0)
+- 앱 빌드(브라우저 wasm): `bash /Users/hckim/repo/jangdan/app/build.sh`; 데스크톱 타입체크 `go vet ./app/...`
 - 전체: `go build ./... && go vet ./... && go test ./... -count=1`
 
 ## 엔진 함정 (engine/ 을 만지는 라운드는 전부)

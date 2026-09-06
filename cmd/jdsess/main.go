@@ -11,8 +11,8 @@ import (
 	"os"
 	"sort"
 
-	"github.com/midagedev/revirth/engine"
-	"github.com/midagedev/revirth/session"
+	"github.com/midagedev/jangdan/engine"
+	"github.com/midagedev/jangdan/session"
 )
 
 const (

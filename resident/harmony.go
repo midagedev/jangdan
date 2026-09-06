@@ -14,7 +14,7 @@
 // 침묵한다(resident.go onBar의 게이트).
 package resident
 
-import "github.com/midagedev/revirth/engine"
+import "github.com/midagedev/jangdan/engine"
 
 // progressions — 마이너 8마디 코드 진행표(도수; §12.4 계약 수치).
 var progressions = [6][engine.ChordBars]uint8{

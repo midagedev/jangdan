@@ -8,7 +8,7 @@ package core
 import (
 	"github.com/hajimehoshi/ebiten/v2"
 
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/engine"
 )
 
 const (

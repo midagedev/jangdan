@@ -6,7 +6,7 @@ package room
 import (
 	"math"
 
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/engine"
 )
 
 // 스펙 수치(기획서 05절·스펙 §1~§6). 픽셀 좌표는 layout.json 소유 — 여기는 비율·시간·진폭만.

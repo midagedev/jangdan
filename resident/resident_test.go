@@ -27,7 +27,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/engine"
 )
 
 // ---- 테스트 헬퍼 ----

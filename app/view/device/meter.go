@@ -14,7 +14,7 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 
-	"github.com/midagedev/revirth/app/core"
+	"github.com/midagedev/jangdan/app/core"
 )
 
 // 수치 계약(스펙 P3-meters origin). 픽셀 절대좌표는 없다 — 표시창·패드 rect(레이아웃 JSON)에서 유도한다.

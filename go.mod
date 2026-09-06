@@ -1,4 +1,4 @@
-module github.com/midagedev/revirth
+module github.com/midagedev/jangdan
 
 go 1.26
 

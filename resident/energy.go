@@ -11,7 +11,7 @@
 // 종료 바 = Drop(에너지 곡선 무시).
 package resident
 
-import "github.com/midagedev/revirth/engine"
+import "github.com/midagedev/jangdan/engine"
 
 // phaseBand — 0..1 대역.
 type phaseBand struct{ lo, hi float32 }

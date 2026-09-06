@@ -17,7 +17,7 @@
 // (엔진 Apply 또는 복사)해야 한다.
 package resident
 
-import "github.com/midagedev/revirth/engine"
+import "github.com/midagedev/jangdan/engine"
 
 // Vibe — 세션 분위기. 바이브 변경(SetVibe)은 다음 바 경계부터 반영된다.
 type Vibe uint8

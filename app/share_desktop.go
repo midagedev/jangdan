@@ -2,7 +2,7 @@
 
 package main
 
-import "github.com/midagedev/revirth/session"
+import "github.com/midagedev/jangdan/session"
 
 func installShare(g *game) {}
 

@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/midagedev/revirth/app/core"
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/app/core"
+	"github.com/midagedev/jangdan/engine"
 )
 
 type btnKind uint8

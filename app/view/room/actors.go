@@ -8,7 +8,7 @@ package room
 import (
 	"math"
 
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/engine"
 )
 
 // 스펙 수치(§5·§7). 각도는 도(degree)로 명명 후 라디안으로 환산해 쓴다.

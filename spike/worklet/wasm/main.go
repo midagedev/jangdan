@@ -3,7 +3,7 @@
 // WebAssembly.Instance 후 _initialize() 1회 호출이 필요(전역 초기화).
 package main
 
-import "github.com/midagedev/revirth/engine"
+import "github.com/midagedev/jangdan/engine"
 
 var eng *engine.Engine
 var out [2 * engine.Block]float32

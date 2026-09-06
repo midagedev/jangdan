@@ -22,8 +22,8 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 
-	"github.com/midagedev/revirth/app/core"
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/app/core"
+	"github.com/midagedev/jangdan/engine"
 )
 
 // fakeBridge — Bridge 20메서드 무동작 구현(테스트 패키지 소유).

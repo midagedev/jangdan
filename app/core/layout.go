@@ -7,7 +7,7 @@ package core
 import (
 	"encoding/json"
 
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/engine"
 )
 
 // DeviceLayout — tools/rack/wire.py 출력 + sprites 표.

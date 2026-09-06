@@ -16,8 +16,8 @@ package device
 import (
 	"strconv"
 
-	"github.com/midagedev/revirth/app/core"
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/app/core"
+	"github.com/midagedev/jangdan/engine"
 )
 
 // 수치 계약(스펙 P2-device origin).

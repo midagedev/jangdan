@@ -14,7 +14,7 @@ package main
 import (
 	"syscall/js"
 
-	"github.com/midagedev/revirth/session"
+	"github.com/midagedev/jangdan/session"
 )
 
 // hostFn — window.jd의 함수. 호스트가 없거나(nop 경로) 함수가 없으면 무효 Value.

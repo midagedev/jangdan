@@ -34,7 +34,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/midagedev/revirth/engine"
+	"github.com/midagedev/jangdan/engine"
 )
 
 // ---- 시드 단어 ----
