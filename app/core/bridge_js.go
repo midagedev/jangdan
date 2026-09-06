@@ -47,7 +47,7 @@ func (j *jsBridge) Tick() Tick {
 	if !t.Truthy() {
 		return Tick{}
 	}
-	return Tick{
+	tk := Tick{
 		Started: t.Get("started").Truthy(),
 		Block:   floatOf(t.Get("block")),
 		Step:    intOf(t.Get("step")),
@@ -57,6 +57,17 @@ func (j *jsBridge) Tick() Tick {
 		CtxTime: floatOf(t.Get("ctxTime")),
 		Playing: t.Get("playing").Truthy(),
 	}
+	// levels — Float32Array(8) 또는 배열. 없거나 짧으면 0(구 호스트 호환). 프레임당 Get 8회.
+	if lv := t.Get("levels"); lv.Truthy() {
+		n := lv.Length()
+		if n > NumLevels {
+			n = NumLevels
+		}
+		for i := 0; i < n; i++ {
+			tk.Levels[i] = float32(floatOf(lv.Index(i)))
+		}
+	}
+	return tk
 }
 
 func (j *jsBridge) KeyRoot() int { return intOf(j.b.Call("keyRoot")) }

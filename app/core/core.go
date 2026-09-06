@@ -36,7 +36,14 @@ type Tick struct {
 	Peak    float32
 	CtxTime float64 // AudioContext.currentTime(초)
 	Playing bool    // 트랜스포트(engine.Playing) — Started 전에는 false
+	// Levels — 파트별(engine.Part 순: BassA BassB BD SD CH OH CP CY) 블록 피크(0..1 근처, 프리 FX).
+	// 직전 Tick() 이후 누적 최대(호스트가 틱마다 OR 대신 max로 모은다). 라인별 활동 LED·VU의 원본.
+	// 구 호스트(levels 없음)는 전부 0 — 미터가 꺼진 채로 그린다(입력 방어).
+	Levels [NumLevels]float32
 }
+
+// NumLevels — Tick.Levels 길이(베이스 2 + 드럼 6 = engine.Part 수).
+const NumLevels = 8
 
 // Bridge — JS 호스트(app/web/host.js)와의 접점. 데스크톱 빌드는 no-op 구현.
 // 메서드는 전부 논블로킹이며 호스트가 없으면 조용히 무동작(값은 0/false).
