@@ -20,6 +20,7 @@ ap=argparse.ArgumentParser(); ap.add_argument('wire'); ap.add_argument('layout')
 ap.add_argument('--scale',type=int,default=2); ap.add_argument('--s1',type=float,default=0.7); ap.add_argument('--s2',type=float,default=0.5); ap.add_argument('--seed',type=int,default=1234)
 ap.add_argument('--only',default=None,help='쉼표로 구분된 모듈 이름(layout.panels 기준)만 채색')
 ap.add_argument('--base',default=None,help='기존 채색 패널 PNG — 위쪽에 그대로 얹고 아래로 늘린다')
+ap.add_argument('--prompts',default=None,help='{모듈: 프롬프트} JSON — 내장 PROMPTS를 통째로 대체(병합 아님). chassis 키 필수')
 a=ap.parse_args()
 KEY=os.environ.get('FAL_KEY') or sys.exit('FAL_KEY is not set — export it in ~/.zshrc (see CLAUDE.md)')
 HERE=os.path.dirname(os.path.abspath(__file__)); ROOT=os.path.abspath(os.path.join(HERE,'..','..'))
@@ -36,6 +37,11 @@ PROMPTS={
  'fx2': STYLE+' One horizontal module of an electronic groovebox: a purple section stripe on the left edge, six round black knobs in two groups of three, blank cream label plates, four small square buttons with tiny LEDs,'+COMMON,
  'chassis': STYLE+' The front panel of a compact electronic groovebox with four stacked horizontal modules,'+COMMON,
 }
+# --prompts: 외부 파일이 내장표를 '대체'한다(병합 아님 — 앞면 drums·fx와 뒷면 drums·fx가 같은 키로 섞이면 안 된다).
+# chassis는 배경 1패스가 쓰므로 파일에 반드시 있어야 한다.
+if a.prompts is not None:
+    PROMPTS=json.load(open(a.prompts))
+    if 'chassis' not in PROMPTS: sys.exit(f'paint: --prompts {a.prompts} must contain "chassis" (background pass key), got {sorted(PROMPTS)}')
 def i2i(img, prompt, strength, seed):
     buf=io.BytesIO(); img.save(buf,'PNG'); data='data:image/png;base64,'+base64.b64encode(buf.getvalue()).decode()
     body=json.dumps({'prompt':prompt,'image_url':data,'strength':strength,'guidance_scale':3.5,'num_inference_steps':28,'seed':seed,'image_size':{'width':img.size[0],'height':img.size[1]}}).encode()
