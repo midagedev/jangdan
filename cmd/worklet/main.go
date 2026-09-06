@@ -69,6 +69,17 @@ func jd_level(p uint32) float32 {
 	return eng.Level(engine.Part(p))
 }
 
+// jd_devparam — 슬롯 로컬 파라미터(§14.1 DeviceParam)의 현재 값 0..1(양자화 정본/4095). 범위 밖 0.
+// 폴리 리드 노브(P5-poly-ui)의 값 소스 — 섀도 엔진이 같은 Cmd를 적용하므로 미러가 맞는다.
+//
+//export jd_devparam
+func jd_devparam(slot, k uint32) float32 {
+	if slot >= engine.RackSlots || k >= engine.DevParams {
+		return 0
+	}
+	return float32(eng.DevParamQ(int(slot), int(k))) / engine.ParamSteps
+}
+
 //export jd_state_ptr
 func jd_state_ptr() *byte { return &state[0] }
 

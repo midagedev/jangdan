@@ -53,6 +53,7 @@ type Bridge interface {
 	Tick() Tick                      // 최신 스냅샷(프레임당 1회 호출)
 	Scope(dst []byte) bool           // 파형 256 Float32 = 1024바이트(리틀엔디언) 복사
 	Param(id engine.ParamID) float32 // 호스트가 미러링한 현재 파라미터 값(레지던트·리플레이 반영)
+	DevParam(slot, k int) float32    // 장치 로컬 파라미터 미러 값(§14.1 DeviceParam; 폴리 리드 노브) — 미러 부재 시 음수
 	BassStep(p engine.Part, step int) (note, flags uint8)
 	DrumStep(p engine.Part, step int) uint8
 	Muted(p engine.Part) bool

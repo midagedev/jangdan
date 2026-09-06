@@ -47,7 +47,7 @@ for i,(y,tint) in enumerate([(140,(150,60,50)),(400,(50,90,140))]):
     d.rounded_rectangle([650,y+180,730,y+214],radius=4,fill=(40,60,50),outline=(15,15,17),width=3); layout.setdefault('displays',[]).append({'for':name,'rect':[650,y+180,80,34]})
 # 드럼 6보이스 (LEVEL·TUNE) + 패드
 panel(24,660,720,300,(52,54,58),'drums'); d.rectangle([24,660,44,960],fill=(200,140,50))
-names=['BD','SD','CH','OH','CP','CB']
+names=['BD','SD','CH','OH','CP','CY']
 for k in range(6):
     x=110+k*110; knob(x,730,26,f'{names[k]}_LEVEL','drums'); knob(x,810,26,f'{names[k]}_TUNE','drums')
     d.rounded_rectangle([x-36,870,x+36,942],radius=8,fill=(76,78,84),outline=(15,15,17),width=3); layout['pads'].append({'name':names[k],'rect':[x-36,870,72,72]})
@@ -73,6 +73,11 @@ if DH >= 1862:
     panel(24,1610,720,252,(58,58,64),'fx2'); d.rectangle([24,1610,44,1862],fill=(120,80,150))
     for k,nm in enumerate(['REV_SIZE','REV_DAMP','REV_MIX','CHO_RATE','CHO_DEPTH','CHO_MIX']): knob(120+k*112,1720,34,nm,'fx2')
     for k,nm in enumerate(['rev_on','cho_on','rev_pre','cho_st']): button(90+k*52,1810,36,(90,90,96),nm,'fx2'); led(108+k*52,1854,False)
+# 폴리 리드 (Phase 3 P5-poly-ui) — 로컬 파라미터 8 노브 한 줄(피치 80 = 믹서 1행 관례, r26 클래스 공유).
+# 패널 1880..2090(h 210); H=2000 → DH=2100. DH<2090 호출(H=1800·1280)에서는 스킵 — 이전 출력 바이트 불변.
+if DH >= 2090:
+    panel(24,1880,720,210,(58,58,64),'poly'); d.rectangle([24,1880,44,2090],fill=(60,130,170))
+    for k,nm in enumerate(['CUTOFF','RESO','ENV','ATTACK','DECAY','RELEASE','DETUNE','LEVEL']): knob(110+k*80,1980,26,nm,'poly')
 # 눈금(손그림 단서) + 노이즈 텍스처
 for k in layout['knobs']:
     cx,cy,r=k['cx'],k['cy'],k['r']

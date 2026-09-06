@@ -77,6 +77,7 @@ func fixtureLayout() *core.RoomLayout {
 	l.Windows = append(l.Windows, core.Rect{500, 900, 400, 300}) // 120000px² — 상한(46080) 단독 초과
 	return l
 }
+func (f *fakeBridge) DevParam(int, int) float32 { return -1 }
 
 // baseSig — 조용한 기본 프레임(Started, 130BPM, 컷오프 중간).
 func baseSig() Signals {

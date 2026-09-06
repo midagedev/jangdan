@@ -790,6 +790,8 @@
       }
       return 0;
     },
+    // 장치 로컬 파라미터(P5-poly-ui): 섀도 없으면 0(기본값 폴백은 Go 쪽 core.DevParamDefault가 안다).
+    devParam: (slot, k) => (shadow.w && typeof shadow.w.jd_devparam === 'function' ? shadow.w.jd_devparam(slot | 0, k | 0) : -1),
     bassStep: (p, step) => (shadow.w ? shadow.w.jd_bass_step(p | 0, (step | 0) & 15) : 0),
     drumStep: (p, step) => (shadow.w ? shadow.w.jd_drum_step(p | 0, (step | 0) & 15) : 0),
     muted: (p) => (shadow.w ? shadow.w.jd_muted(p | 0) : 0), // 0|1 number — 2026-09-05 boolean 패닉 교훈(bridge_js intOf)

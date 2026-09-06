@@ -8,6 +8,7 @@
 //	jd.tick() → {started,block,step,bar,flags,peak,ctxTime}   최신 스냅샷(flags는 호출 사이 누적, 읽으면 0으로)
 //	jd.scope() → Uint8Array(1024) | null         파형 256 Float32 뷰
 //	jd.param(id) → number                        호스트 미러 값(0..1)
+//	jd.devParam(slot,k) → number                 장치 로컬 파라미터 미러 값(0..1; 섀도 부재 −1)
 //	jd.bassStep(part,step) → note | flags<<8     jd.drumStep(part,step) → flags   jd.muted(part) → 0|1   jd.slot(part) → n
 //	jd.keyRoot() → 0..11   jd.chord(bar) → deg | flags<<8   jd.mode(part) → mode | dir<<8   jd.hint(state)   (Phase 2 §12)
 //	tick에 playing(bool) 추가
@@ -96,6 +97,10 @@ func (j *jsBridge) Param(id engine.ParamID) float32 {
 	return float32(floatOf(j.b.Call("param", int(id))))
 }
 
+func (j *jsBridge) DevParam(slot, k int) float32 {
+	return float32(floatOf(j.b.Call("devParam", slot, k)))
+}
+
 func floatOf(v js.Value) float64 {
 	if v.Type() == js.TypeNumber {
 		return v.Float()
@@ -163,6 +168,7 @@ func (nopBridge) Cmd(engine.Cmd, Author)                   {}
 func (nopBridge) Tick() Tick                               { return Tick{} }
 func (nopBridge) Scope([]byte) bool                        { return false }
 func (nopBridge) Param(engine.ParamID) float32             { return 0 }
+func (nopBridge) DevParam(int, int) float32                { return -1 }
 func (nopBridge) BassStep(engine.Part, int) (uint8, uint8) { return 0, 0 }
 func (nopBridge) DrumStep(engine.Part, int) uint8          { return 0 }
 func (nopBridge) Muted(engine.Part) bool                   { return false }

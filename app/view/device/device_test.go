@@ -85,17 +85,18 @@ import (
 
 // fakeBridge — 기록형 브리지: 보낸 Cmd(시각 포함)와 파라미터·스텝·뮤트·화성 미러.
 type fakeBridge struct {
-	cmds   []recCmd
-	params [engine.NumParams]float32
-	bass   [2][engine.Steps][2]uint8 // [note, flags]
-	drum   [6][engine.Steps]uint8
-	muted  [engine.NumParts]bool
-	slot   [2]uint8
-	key    int
-	chord  [engine.ChordBars][2]uint8 // [deg, flags]
-	mode   [2][2]uint8                // [mode, dir] — 파트 A/B
-	now    float64
-	tick   core.Tick
+	cmds      []recCmd
+	params    [engine.NumParams]float32
+	devParams [engine.DevParams]float32 // 폴리 슬롯 로컬 파라미터 미러(DevParam)
+	bass      [2][engine.Steps][2]uint8 // [note, flags]
+	drum      [6][engine.Steps]uint8
+	muted     [engine.NumParts]bool
+	slot      [2]uint8
+	key       int
+	chord     [engine.ChordBars][2]uint8 // [deg, flags]
+	mode      [2][2]uint8                // [mode, dir] — 파트 A/B
+	now       float64
+	tick      core.Tick
 }
 
 type recCmd struct {
@@ -121,6 +122,13 @@ func (f *fakeBridge) Tick() core.Tick            { return f.tick }
 func (f *fakeBridge) Scope([]byte) bool          { return false }
 func (f *fakeBridge) Param(id engine.ParamID) float32 {
 	return f.params[id]
+}
+
+func (f *fakeBridge) DevParam(slot, k int) float32 {
+	if slot == engine.SlotPoly && k >= 0 && k < engine.DevParams {
+		return f.devParams[k]
+	}
+	return -1
 }
 
 func (f *fakeBridge) BassStep(p engine.Part, step int) (uint8, uint8) {

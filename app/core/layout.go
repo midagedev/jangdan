@@ -148,6 +148,35 @@ func LoadRoomLayout(b []byte) (*RoomLayout, error) {
 	return &l, nil
 }
 
+// polyKnob — 섹션 "poly" 노브 이름 → 장치 로컬 파라미터 k(engine/poly.go 표).
+var polyKnob = map[string]int{
+	"CUTOFF": engine.PolyCutoff, "RESO": engine.PolyReso, "ENV": engine.PolyEnvMod, "ATTACK": engine.PolyAttack,
+	"DECAY": engine.PolyDecay, "RELEASE": engine.PolyRelease, "DETUNE": engine.PolyDetune, "LEVEL": engine.PolyLevel,
+}
+
+// KnobDevParam — 장치 로컬 파라미터 노브(§14.1 DeviceParam): 섹션·이름 → (슬롯, k). 지금은 섹션
+// "poly"(슬롯 engine.SlotPoly)만. 알 수 없으면 false. KnobParam과 함께 UI↔엔진 매핑의 단일 소유자 —
+// 한 노브는 둘 중 하나에만 속한다(둘 다 false면 New가 레이아웃 오류로 거부한다).
+func KnobDevParam(section, name string) (slot, k int, ok bool) {
+	if section != "poly" {
+		return 0, 0, false
+	}
+	k, ok = polyKnob[name]
+	if !ok {
+		return 0, 0, false
+	}
+	return engine.SlotPoly, k, true
+}
+
+// DevParamDefault — 장치 로컬 파라미터 기본값(섀도 미러가 아직 없을 때 노브 표시 폴백). 슬롯 종류를
+// 모르므로 폴리 슬롯만 안다(SlotPoly 외 0).
+func DevParamDefault(slot, k int) float32 {
+	if slot == engine.SlotPoly && k >= 0 && k < engine.PolyParams {
+		return engine.DefaultPolyParams()[k]
+	}
+	return 0
+}
+
 // KnobParam — 기기 레이아웃의 노브 이름·섹션 → 엔진 ParamID. 알 수 없으면 false.
 // 이 표가 UI↔엔진 매핑의 단일 소유자다(view/device는 이 함수를 쓴다).
 func KnobParam(section, name string) (engine.ParamID, bool) {
