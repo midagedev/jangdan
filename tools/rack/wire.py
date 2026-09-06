@@ -5,12 +5,15 @@
 import sys, json, math
 from PIL import Image, ImageDraw
 OUT=sys.argv[1]; LAY=sys.argv[2]; W=int(sys.argv[3]) if len(sys.argv)>3 else 720; H=int(sys.argv[4]) if len(sys.argv)>4 else 1280
-SX=W/768; SY=H/1344
+# 설계 캔버스 높이는 출력 높이에서 유도: DH=round(1344*H/1280)이면 SY=H/DH가 언제나
+# 1280/1344와 같다(H=1800 → DH=1890, 1800/1890 == 1280/1344) — 캔버스를 늘려도
+# 기존 요소의 출력 좌표가 1px도 변하지 않는다(후보 v3 검증 계약).
+SX=W/768; DH=round(1344*H/1280); SY=H/DH
 def X(v): return round(v*SX)
 def Y(v): return round(v*SY)
 def R(v): return round(v*(SX+SY)/2)
-im=Image.new('RGB',(768,1344),(38,36,40)); d=ImageDraw.Draw(im)
-layout={'size':[768,1344],'knobs':[],'buttons':[],'pads':[],'plates':[],'panels':[],'leds':[],'displays':[]}
+im=Image.new('RGB',(768,DH),(38,36,40)); d=ImageDraw.Draw(im)
+layout={'size':[768,DH],'knobs':[],'buttons':[],'pads':[],'plates':[],'panels':[],'leds':[],'displays':[]}
 def panel(x,y,w,h,fill,name):
     d.rounded_rectangle([x,y,x+w,y+h],radius=14,fill=fill,outline=(20,20,22),width=4); layout['panels'].append({'name':name,'rect':[x,y,w,h]})
     # 이름판 (글자는 코드가 나중에 폰트로)
@@ -56,14 +59,28 @@ for k in range(16):
     x=64+k*42; button(x,1160,34,(200,110,40) if k%4==0 else (120,80,50),f'step{k+1}','fx'); led(x+17,1215,k==0)
 button(64,1250,50,(80,140,90),'play','fx'); button(140,1250,50,(140,80,80),'rec','fx')
 d.rounded_rectangle([230,1250,470,1300],radius=6,fill=(40,60,50),outline=(15,15,17),width=3); layout['display']={'rect':[230,1250,240,50]}
+# 믹서 (Phase 2.5) — 리버브 센드 8 + 베이스 레벨·코러스 센드 4 + 활동 LED 8.
+# 1행 간격은 스펙 초안의 90이 아니라 80: 90이면 마지막 노브 cx=740이 패널 우변 744를
+# 면 714..766·스커트 772로 뚫고 나간다(기존 모듈 관례 = 스커트 여백 24px↑). 80이면 마지막 670, 여백 42px.
+# 캔버스가 이 모듈들을 담을 때만 그린다(fx2 밑변 1862; H=1800 → DH=1890).
+# H=1280(DH=1344) 호출에서는 아래 블록이 스킵되어 예전 출력과 바이트가 같다.
+if DH >= 1862:
+    panel(24,1350,720,242,(58,58,64),'mixer'); d.rectangle([24,1350,44,1592],fill=(120,80,150))
+    for k,nm in enumerate(['REV_A','REV_B','REV_BD','REV_SD','REV_CH','REV_OH','REV_CP','REV_CY']): knob(110+k*80,1430,26,nm,'mixer')
+    for k,nm in enumerate(['LEVEL_A','LEVEL_B','CHO_A','CHO_B']): knob(110+k*112,1520,26,nm,'mixer')
+    for k in range(8): led(600+k*18,1520,False)
+    # 리버브·코러스 (Phase 2.5). LED는 버튼 관례(버튼 밑)대로 cy=1854 — 1860이면 패널 밑변 1862을 4px 넘는다.
+    panel(24,1610,720,252,(58,58,64),'fx2'); d.rectangle([24,1610,44,1862],fill=(120,80,150))
+    for k,nm in enumerate(['REV_SIZE','REV_DAMP','REV_MIX','CHO_RATE','CHO_DEPTH','CHO_MIX']): knob(120+k*112,1720,34,nm,'fx2')
+    for k,nm in enumerate(['rev_on','cho_on','rev_pre','cho_st']): button(90+k*52,1810,36,(90,90,96),nm,'fx2'); led(108+k*52,1854,False)
 # 눈금(손그림 단서) + 노이즈 텍스처
 for k in layout['knobs']:
     cx,cy,r=k['cx'],k['cy'],k['r']
     for i in range(11):
         a=math.radians(-135+i*27-90)
         d.line([cx+math.cos(a)*(r+9),cy+math.sin(a)*(r+9),cx+math.cos(a)*(r+15),cy+math.sin(a)*(r+15)],fill=(215,205,180),width=2)
-noise=Image.effect_noise((768,1344),18).convert('L')
-im=Image.composite(im, Image.blend(im, Image.new('RGB',(768,1344),(0,0,0)),0.12), noise.point(lambda v: 255 if v>128 else 200))
+noise=Image.effect_noise((768,DH),18).convert('L')
+im=Image.composite(im, Image.blend(im, Image.new('RGB',(768,DH),(0,0,0)),0.12), noise.point(lambda v: 255 if v>128 else 200))
 im=im.resize((W,H),Image.LANCZOS); im.save(OUT)
 def sc(o):
     if isinstance(o,dict):

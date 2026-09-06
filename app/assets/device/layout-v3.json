@@ -1,0 +1,1263 @@
+{
+ "size": [
+  720,
+  1800
+ ],
+ "knobs": [
+  {
+   "name": "TUNE",
+   "section": "basslineA",
+   "cx": 112,
+   "cy": 224,
+   "r": 32
+  },
+  {
+   "name": "CUTOFF",
+   "section": "basslineA",
+   "cx": 218,
+   "cy": 224,
+   "r": 32
+  },
+  {
+   "name": "RESO",
+   "section": "basslineA",
+   "cx": 322,
+   "cy": 224,
+   "r": 32
+  },
+  {
+   "name": "ENV",
+   "section": "basslineA",
+   "cx": 428,
+   "cy": 224,
+   "r": 32
+  },
+  {
+   "name": "DECAY",
+   "section": "basslineA",
+   "cx": 532,
+   "cy": 224,
+   "r": 32
+  },
+  {
+   "name": "ACCENT",
+   "section": "basslineA",
+   "cx": 638,
+   "cy": 224,
+   "r": 32
+  },
+  {
+   "name": "TUNE",
+   "section": "basslineB",
+   "cx": 112,
+   "cy": 471,
+   "r": 32
+  },
+  {
+   "name": "CUTOFF",
+   "section": "basslineB",
+   "cx": 218,
+   "cy": 471,
+   "r": 32
+  },
+  {
+   "name": "RESO",
+   "section": "basslineB",
+   "cx": 322,
+   "cy": 471,
+   "r": 32
+  },
+  {
+   "name": "ENV",
+   "section": "basslineB",
+   "cx": 428,
+   "cy": 471,
+   "r": 32
+  },
+  {
+   "name": "DECAY",
+   "section": "basslineB",
+   "cx": 532,
+   "cy": 471,
+   "r": 32
+  },
+  {
+   "name": "ACCENT",
+   "section": "basslineB",
+   "cx": 638,
+   "cy": 471,
+   "r": 32
+  },
+  {
+   "name": "BD_LEVEL",
+   "section": "drums",
+   "cx": 103,
+   "cy": 695,
+   "r": 25
+  },
+  {
+   "name": "BD_TUNE",
+   "section": "drums",
+   "cx": 103,
+   "cy": 771,
+   "r": 25
+  },
+  {
+   "name": "SD_LEVEL",
+   "section": "drums",
+   "cx": 206,
+   "cy": 695,
+   "r": 25
+  },
+  {
+   "name": "SD_TUNE",
+   "section": "drums",
+   "cx": 206,
+   "cy": 771,
+   "r": 25
+  },
+  {
+   "name": "CH_LEVEL",
+   "section": "drums",
+   "cx": 309,
+   "cy": 695,
+   "r": 25
+  },
+  {
+   "name": "CH_TUNE",
+   "section": "drums",
+   "cx": 309,
+   "cy": 771,
+   "r": 25
+  },
+  {
+   "name": "OH_LEVEL",
+   "section": "drums",
+   "cx": 412,
+   "cy": 695,
+   "r": 25
+  },
+  {
+   "name": "OH_TUNE",
+   "section": "drums",
+   "cx": 412,
+   "cy": 771,
+   "r": 25
+  },
+  {
+   "name": "CP_LEVEL",
+   "section": "drums",
+   "cx": 516,
+   "cy": 695,
+   "r": 25
+  },
+  {
+   "name": "CP_TUNE",
+   "section": "drums",
+   "cx": 516,
+   "cy": 771,
+   "r": 25
+  },
+  {
+   "name": "CY_LEVEL",
+   "section": "drums",
+   "cx": 619,
+   "cy": 695,
+   "r": 25
+  },
+  {
+   "name": "CY_TUNE",
+   "section": "drums",
+   "cx": 619,
+   "cy": 771,
+   "r": 25
+  },
+  {
+   "name": "DELAY",
+   "section": "fx",
+   "cx": 112,
+   "cy": 1010,
+   "r": 32
+  },
+  {
+   "name": "DRIVE",
+   "section": "fx",
+   "cx": 218,
+   "cy": 1010,
+   "r": 32
+  },
+  {
+   "name": "COMP",
+   "section": "fx",
+   "cx": 322,
+   "cy": 1010,
+   "r": 32
+  },
+  {
+   "name": "MASTER",
+   "section": "fx",
+   "cx": 428,
+   "cy": 1010,
+   "r": 32
+  },
+  {
+   "name": "TEMPO",
+   "section": "fx",
+   "cx": 619,
+   "cy": 1010,
+   "r": 42
+  },
+  {
+   "name": "REV_A",
+   "section": "mixer",
+   "cx": 103,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "REV_B",
+   "section": "mixer",
+   "cx": 178,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "REV_BD",
+   "section": "mixer",
+   "cx": 253,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "REV_SD",
+   "section": "mixer",
+   "cx": 328,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "REV_CH",
+   "section": "mixer",
+   "cx": 403,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "REV_OH",
+   "section": "mixer",
+   "cx": 478,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "REV_CP",
+   "section": "mixer",
+   "cx": 553,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "REV_CY",
+   "section": "mixer",
+   "cx": 628,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "LEVEL_A",
+   "section": "mixer",
+   "cx": 103,
+   "cy": 1448,
+   "r": 25
+  },
+  {
+   "name": "LEVEL_B",
+   "section": "mixer",
+   "cx": 208,
+   "cy": 1448,
+   "r": 25
+  },
+  {
+   "name": "CHO_A",
+   "section": "mixer",
+   "cx": 313,
+   "cy": 1448,
+   "r": 25
+  },
+  {
+   "name": "CHO_B",
+   "section": "mixer",
+   "cx": 418,
+   "cy": 1448,
+   "r": 25
+  },
+  {
+   "name": "REV_SIZE",
+   "section": "fx2",
+   "cx": 112,
+   "cy": 1638,
+   "r": 32
+  },
+  {
+   "name": "REV_DAMP",
+   "section": "fx2",
+   "cx": 218,
+   "cy": 1638,
+   "r": 32
+  },
+  {
+   "name": "REV_MIX",
+   "section": "fx2",
+   "cx": 322,
+   "cy": 1638,
+   "r": 32
+  },
+  {
+   "name": "CHO_RATE",
+   "section": "fx2",
+   "cx": 428,
+   "cy": 1638,
+   "r": 32
+  },
+  {
+   "name": "CHO_DEPTH",
+   "section": "fx2",
+   "cx": 532,
+   "cy": 1638,
+   "r": 32
+  },
+  {
+   "name": "CHO_MIX",
+   "section": "fx2",
+   "cx": 638,
+   "cy": 1638,
+   "r": 32
+  }
+ ],
+ "buttons": [
+  {
+   "name": "saw",
+   "section": "basslineA",
+   "rect": [
+    84,
+    303,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "sqr",
+   "section": "basslineA",
+   "rect": [
+    133,
+    303,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "slide",
+   "section": "basslineA",
+   "rect": [
+    182,
+    303,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "acc",
+   "section": "basslineA",
+   "rect": [
+    231,
+    303,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "oct-",
+   "section": "basslineA",
+   "rect": [
+    279,
+    303,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "oct+",
+   "section": "basslineA",
+   "rect": [
+    328,
+    303,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "patA",
+   "section": "basslineA",
+   "rect": [
+    403,
+    303,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "patB",
+   "section": "basslineA",
+   "rect": [
+    452,
+    303,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "patC",
+   "section": "basslineA",
+   "rect": [
+    501,
+    303,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "patD",
+   "section": "basslineA",
+   "rect": [
+    549,
+    303,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "saw",
+   "section": "basslineB",
+   "rect": [
+    84,
+    550,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "sqr",
+   "section": "basslineB",
+   "rect": [
+    133,
+    550,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "slide",
+   "section": "basslineB",
+   "rect": [
+    182,
+    550,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "acc",
+   "section": "basslineB",
+   "rect": [
+    231,
+    550,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "oct-",
+   "section": "basslineB",
+   "rect": [
+    279,
+    550,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "oct+",
+   "section": "basslineB",
+   "rect": [
+    328,
+    550,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "patA",
+   "section": "basslineB",
+   "rect": [
+    403,
+    550,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "patB",
+   "section": "basslineB",
+   "rect": [
+    452,
+    550,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "patC",
+   "section": "basslineB",
+   "rect": [
+    501,
+    550,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "patD",
+   "section": "basslineB",
+   "rect": [
+    549,
+    550,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "step1",
+   "section": "fx",
+   "rect": [
+    60,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "step2",
+   "section": "fx",
+   "rect": [
+    99,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "step3",
+   "section": "fx",
+   "rect": [
+    139,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "step4",
+   "section": "fx",
+   "rect": [
+    178,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "step5",
+   "section": "fx",
+   "rect": [
+    218,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "step6",
+   "section": "fx",
+   "rect": [
+    257,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "step7",
+   "section": "fx",
+   "rect": [
+    296,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "step8",
+   "section": "fx",
+   "rect": [
+    336,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "step9",
+   "section": "fx",
+   "rect": [
+    375,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "step10",
+   "section": "fx",
+   "rect": [
+    414,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "step11",
+   "section": "fx",
+   "rect": [
+    454,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "step12",
+   "section": "fx",
+   "rect": [
+    493,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "step13",
+   "section": "fx",
+   "rect": [
+    532,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "step14",
+   "section": "fx",
+   "rect": [
+    572,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "step15",
+   "section": "fx",
+   "rect": [
+    611,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "step16",
+   "section": "fx",
+   "rect": [
+    651,
+    1105,
+    32,
+    32
+   ]
+  },
+  {
+   "name": "play",
+   "section": "fx",
+   "rect": [
+    60,
+    1190,
+    47,
+    48
+   ]
+  },
+  {
+   "name": "rec",
+   "section": "fx",
+   "rect": [
+    131,
+    1190,
+    47,
+    48
+   ]
+  },
+  {
+   "name": "rev_on",
+   "section": "fx2",
+   "rect": [
+    84,
+    1724,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "cho_on",
+   "section": "fx2",
+   "rect": [
+    133,
+    1724,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "rev_pre",
+   "section": "fx2",
+   "rect": [
+    182,
+    1724,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "cho_st",
+   "section": "fx2",
+   "rect": [
+    231,
+    1724,
+    34,
+    34
+   ]
+  }
+ ],
+ "pads": [
+  {
+   "name": "BD",
+   "rect": [
+    69,
+    829,
+    68,
+    69
+   ]
+  },
+  {
+   "name": "SD",
+   "rect": [
+    172,
+    829,
+    68,
+    69
+   ]
+  },
+  {
+   "name": "CH",
+   "rect": [
+    276,
+    829,
+    68,
+    69
+   ]
+  },
+  {
+   "name": "OH",
+   "rect": [
+    379,
+    829,
+    68,
+    69
+   ]
+  },
+  {
+   "name": "CP",
+   "rect": [
+    482,
+    829,
+    68,
+    69
+   ]
+  },
+  {
+   "name": "CY",
+   "rect": [
+    585,
+    829,
+    68,
+    69
+   ]
+  }
+ ],
+ "plates": [
+  {
+   "for": "title",
+   "rect": [
+    22,
+    19,
+    259,
+    48
+   ]
+  },
+  {
+   "for": "basslineA",
+   "rect": [
+    36,
+    143,
+    128,
+    23
+   ]
+  },
+  {
+   "for": "basslineB",
+   "rect": [
+    36,
+    390,
+    128,
+    23
+   ]
+  },
+  {
+   "for": "drums",
+   "rect": [
+    36,
+    638,
+    128,
+    23
+   ]
+  },
+  {
+   "for": "fx",
+   "rect": [
+    36,
+    943,
+    128,
+    23
+   ]
+  },
+  {
+   "for": "mixer",
+   "rect": [
+    36,
+    1295,
+    128,
+    23
+   ]
+  },
+  {
+   "for": "fx2",
+   "rect": [
+    36,
+    1543,
+    128,
+    23
+   ]
+  }
+ ],
+ "panels": [
+  {
+   "name": "basslineA",
+   "rect": [
+    22,
+    133,
+    675,
+    229
+   ]
+  },
+  {
+   "name": "basslineB",
+   "rect": [
+    22,
+    381,
+    675,
+    229
+   ]
+  },
+  {
+   "name": "drums",
+   "rect": [
+    22,
+    629,
+    675,
+    286
+   ]
+  },
+  {
+   "name": "fx",
+   "rect": [
+    22,
+    933,
+    675,
+    324
+   ]
+  },
+  {
+   "name": "mixer",
+   "rect": [
+    22,
+    1286,
+    675,
+    230
+   ]
+  },
+  {
+   "name": "fx2",
+   "rect": [
+    22,
+    1533,
+    675,
+    240
+   ]
+  }
+ ],
+ "leds": [
+  {
+   "cx": 101,
+   "cy": 350,
+   "r": 6
+  },
+  {
+   "cx": 150,
+   "cy": 350,
+   "r": 6
+  },
+  {
+   "cx": 199,
+   "cy": 350,
+   "r": 6
+  },
+  {
+   "cx": 248,
+   "cy": 350,
+   "r": 6
+  },
+  {
+   "cx": 296,
+   "cy": 350,
+   "r": 6
+  },
+  {
+   "cx": 345,
+   "cy": 350,
+   "r": 6
+  },
+  {
+   "cx": 420,
+   "cy": 350,
+   "r": 6
+  },
+  {
+   "cx": 469,
+   "cy": 350,
+   "r": 6
+  },
+  {
+   "cx": 518,
+   "cy": 350,
+   "r": 6
+  },
+  {
+   "cx": 566,
+   "cy": 350,
+   "r": 6
+  },
+  {
+   "cx": 101,
+   "cy": 598,
+   "r": 6
+  },
+  {
+   "cx": 150,
+   "cy": 598,
+   "r": 6
+  },
+  {
+   "cx": 199,
+   "cy": 598,
+   "r": 6
+  },
+  {
+   "cx": 248,
+   "cy": 598,
+   "r": 6
+  },
+  {
+   "cx": 296,
+   "cy": 598,
+   "r": 6
+  },
+  {
+   "cx": 345,
+   "cy": 598,
+   "r": 6
+  },
+  {
+   "cx": 420,
+   "cy": 598,
+   "r": 6
+  },
+  {
+   "cx": 469,
+   "cy": 598,
+   "r": 6
+  },
+  {
+   "cx": 518,
+   "cy": 598,
+   "r": 6
+  },
+  {
+   "cx": 566,
+   "cy": 598,
+   "r": 6
+  },
+  {
+   "cx": 76,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 115,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 155,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 194,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 233,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 273,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 312,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 352,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 391,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 430,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 470,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 509,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 548,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 588,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 627,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 667,
+   "cy": 1157,
+   "r": 6
+  },
+  {
+   "cx": 562,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 579,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 596,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 613,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 630,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 647,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 664,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 681,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 101,
+   "cy": 1766,
+   "r": 6
+  },
+  {
+   "cx": 150,
+   "cy": 1766,
+   "r": 6
+  },
+  {
+   "cx": 199,
+   "cy": 1766,
+   "r": 6
+  },
+  {
+   "cx": 248,
+   "cy": 1766,
+   "r": 6
+  }
+ ],
+ "displays": [
+  {
+   "for": "basslineA",
+   "rect": [
+    609,
+    305,
+    75,
+    32
+   ]
+  },
+  {
+   "for": "basslineB",
+   "rect": [
+    609,
+    552,
+    75,
+    32
+   ]
+  }
+ ],
+ "scope": {
+  "rect": [
+   322,
+   25,
+   362,
+   76
+  ]
+ },
+ "display": {
+  "rect": [
+   216,
+   1190,
+   225,
+   48
+  ]
+ },
+ "chord_track": {
+  "rect": [
+   22,
+   103,
+   675,
+   27
+  ]
+ },
+ "sprites": {
+  "knob-r25.png": {
+   "size": [
+    56,
+    56
+   ],
+   "r": 25
+  },
+  "knob-r32.png": {
+   "size": [
+    70,
+    70
+   ],
+   "r": 32
+  },
+  "knob-r42.png": {
+   "size": [
+    90,
+    90
+   ],
+   "r": 42
+  }
+ },
+ "source": {
+  "candidate": "rack-candidate-v1",
+  "panel": "panel-720-v4t.png",
+  "seed": 1234,
+  "strength": [
+   0.7,
+   0.45
+  ],
+  "note": "labels are drawn by the app font; CB renamed CY",
+  "v3": {
+   "wire": "layout-wire-v3.json",
+   "seed": 1234,
+   "modules": [
+    "mixer",
+    "fx2"
+   ]
+  }
+ }
+}

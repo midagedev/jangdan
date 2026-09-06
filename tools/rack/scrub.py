@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """tools/rack/scrub.py — 채색된 패널에서 '선언되지 않은 밝은/채도 높은 자국'(가짜 글자·낙서)을 지운다.
 
-  python3 tools/rack/scrub.py <panel.png> <layout.json> <out.png>
+  python3 tools/rack/scrub.py <panel.png> <layout.json> <out.png> [--rows y0,y1]
+
+--rows: 그 행 구간(y0 이상 y1 미만)에서만 스크럽한다. 마스크 팽창(MaxFilter) 뒤에 행 마스크를
+곱하므로 팽창이 구간 위로 번지지 않는다 — 구간 밖 픽셀은 바이트 그대로다(후보 v3: y>=1280 새 띠만).
 
 원리: layout.json이 모든 컨트롤(노브+눈금 고리, 버튼, 패드, 라벨판, LED, 표시창, 섹션 띠, 스코프)의 자리를 안다.
 그 밖의 영역에서 밝기 > 150 또는 채도 > 110 인 픽셀은 diffusion이 채운 가짜 글자다 → 3px 팽창 후 주변 중앙값(반경 9)으로 메운다.
@@ -10,7 +13,15 @@
 """
 import sys, json
 from PIL import Image, ImageDraw, ImageFilter, ImageChops
-panel=Image.open(sys.argv[1]).convert('RGB'); L=json.load(open(sys.argv[2])); W,H=panel.size
+argv=sys.argv[1:]; rows=None
+if '--rows' in argv:
+    i=argv.index('--rows')
+    try: y0,y1=map(int,argv[i+1].split(','))
+    except (IndexError,ValueError): sys.exit('scrub: --rows expects y0,y1 (e.g. --rows 1280,1800)')
+    if not (0<=y0<y1): sys.exit('scrub: --rows needs 0 <= y0 < y1')
+    rows=(y0,y1); del argv[i:i+2]
+if len(argv)!=3: sys.exit('usage: scrub.py <panel.png> <layout.json> <out.png> [--rows y0,y1]')
+panel=Image.open(argv[0]).convert('RGB'); L=json.load(open(argv[1])); W,H=panel.size
 keep=Image.new('L',(W,H),0); d=ImageDraw.Draw(keep)
 for k in L['knobs']: r=k['r']+18; d.ellipse([k['cx']-r,k['cy']-r,k['cx']+r,k['cy']+r],fill=255)
 for key in ('buttons','pads','plates','displays'):
@@ -30,6 +41,11 @@ face=Image.new('L',(W,H),0); fd=ImageDraw.Draw(face)
 for k in L['knobs']: r=k['r']-2; fd.ellipse([k['cx']-r,k['cy']-r,k['cx']+r,k['cy']+r],fill=255)
 bad=ImageChops.lighter(bad, ImageChops.multiply(S.point(lambda v:255 if v>90 else 0), face))
 bad=bad.filter(ImageFilter.MaxFilter(5))
+if rows is not None:
+    y0,y1=rows; rowmask=Image.new('L',(W,H),0); ImageDraw.Draw(rowmask).rectangle([0,y0,W,y1-1],fill=255)
+    bad=ImageChops.multiply(bad,rowmask)  # 팽창 뒤에 자른다 — 구간 밖(위쪽 기존 픽셀)로 번지지 않음
 fill=panel.filter(ImageFilter.MedianFilter(19))
-out=Image.composite(fill, panel, bad); out.save(sys.argv[3])
-n=sum(1 for v in bad.get_flattened_data() if v) if hasattr(bad,'get_flattened_data') else sum(1 for v in bad.getdata() if v); print(f'scrub: {sys.argv[3]} scrubbed {n} px ({100*n/(W*H):.2f}%)')
+out=Image.composite(fill, panel, bad); out.save(argv[2])
+n=sum(1 for v in bad.get_flattened_data() if v) if hasattr(bad,'get_flattened_data') else sum(1 for v in bad.getdata() if v)
+if rows is not None: print(f'scrub: {argv[2]} scrubbed {n} px ({100*n/(W*(rows[1]-rows[0])):.2f}% of rows {rows[0]}..{rows[1]}, canvas {100*n/(W*H):.2f}%)')
+else: print(f'scrub: {argv[2]} scrubbed {n} px ({100*n/(W*H):.2f}%)')
