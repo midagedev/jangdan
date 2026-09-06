@@ -47,14 +47,15 @@ const (
 
 // 기본 랙 슬롯(Reset이 만든다 — §14.1 "기본 랙(현재 구성)").
 const (
-	SlotBassA  = 0
-	SlotBassB  = 1
-	SlotDrums  = 2
-	SlotFx     = 3
-	SlotReverb = 4
-	SlotChorus = 5
-	SlotMain   = 6
-	SlotPoly   = 7 // 폴리 리드(KindPoly — P5-poly에서 기본 랙에 놓인다; 레지던트가 이 슬롯에 연주한다)
+	SlotBassA   = 0
+	SlotBassB   = 1
+	SlotDrums   = 2
+	SlotFx      = 3
+	SlotReverb  = 4
+	SlotChorus  = 5
+	SlotMain    = 6
+	SlotPoly    = 7 // 폴리 리드(KindPoly — P5-poly에서 기본 랙에 놓인다; 레지던트가 이 슬롯에 연주한다)
+	SlotSampler = 8 // 샘플러(KindSampler — P5-sampler-ui에서 기본 랙에 놓인다; 레지던트가 이 슬롯에 연주한다)
 )
 
 // kindPorts — 종류별 (입력 수, 출력 수). 정적 데이터(할당 아님).
@@ -143,11 +144,13 @@ func (r *rack) buildDefault() {
 	r.addDevice(SlotChorus, KindChorus)
 	r.addDevice(SlotMain, KindMain)
 	r.addDevice(SlotPoly, KindPoly)
+	r.addDevice(SlotSampler, KindSampler)
 	// 드라이 경로(폴리는 Fx 직결 입력 — 덕킹 대상이 아니다)
 	r.connect(SlotBassA, 0, SlotFx, 0, Unbound, ParamSteps)
 	r.connect(SlotBassB, 0, SlotFx, 0, Unbound, ParamSteps)
 	r.connect(SlotDrums, 0, SlotFx, 1, Unbound, ParamSteps)
 	r.connect(SlotPoly, 0, SlotFx, 1, Unbound, ParamSteps)
+	r.connect(SlotSampler, 0, SlotFx, 1, Unbound, ParamSteps)
 	r.connect(SlotDrums, 1, SlotFx, 2, Unbound, ParamSteps)
 	// 폴리 센드(비결속 — §14.2: 폴리 센드 노브는 UI 라운드에서 케이블 게인에 바인딩)
 	qDly, _ := quantize(0.55)
@@ -156,6 +159,11 @@ func (r *rack) buildDefault() {
 	r.connect(SlotPoly, 0, SlotFx, 3, Unbound, qDly)
 	r.connect(SlotPoly, 0, SlotReverb, 0, Unbound, qRev)
 	r.connect(SlotPoly, 0, SlotChorus, 0, Unbound, qCho)
+	// 샘플러 센드(비결속 — 폴리와 같은 규칙. 코러스는 없다: 타격·질감 소스라 관용이 아니다)
+	qSDly, _ := quantize(0.35)
+	qSRev, _ := quantize(0.30)
+	r.connect(SlotSampler, 0, SlotFx, 3, Unbound, qSDly)
+	r.connect(SlotSampler, 0, SlotReverb, 0, Unbound, qSRev)
 	// 센드: 파트 8 → 딜레이 입력(Fx 포트 3)·리버브, 베이스 2 → 코러스
 	for p := Part(0); p < NumParts; p++ {
 		s, o := r.partSlot[p], r.partPort[p]

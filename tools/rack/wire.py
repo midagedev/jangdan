@@ -78,6 +78,17 @@ if DH >= 1862:
 if DH >= 2090:
     panel(24,1880,720,210,(58,58,64),'poly'); d.rectangle([24,1880,44,2090],fill=(60,130,170))
     for k,nm in enumerate(['CUTOFF','RESO','ENV','ATTACK','DECAY','RELEASE','DETUNE','LEVEL']): knob(110+k*80,1980,26,nm,'poly')
+# 샘플러 (Phase 3 P5-sampler-ui) — 로컬 파라미터 8 노브 한 줄(폴리와 같은 피치 80·r26 클래스)
+# + 팩 슬롯 이름을 앱 폰트가 올릴 표시창. 패널 2108..2318(h 210 — 폴리와 같은 높이).
+# H=2220 → DH=2331. DH<2318 호출(H=2000·1800·1280)에서는 스킵 — 이전 출력 바이트 불변.
+# H는 20의 배수여야 한다: DH=1.05·H가 정수여야 SY가 정확히 1280/1344로 유지된다(기존 좌표 불변 계약).
+if DH >= 2318:
+    panel(24,2108,720,210,(58,58,64),'sampler'); d.rectangle([24,2108,44,2318],fill=(170,90,120))
+    for k,nm in enumerate(['SELECT','TUNE','START','LOOP','ATTACK','RELEASE','TONE','LEVEL']): knob(110+k*80,2208,26,nm,'sampler')
+    # 팩 슬롯 이름 표시창(PLUCK·BELL…) — 이름판 오른쪽 같은 띠. 글자는 앱이 폰트로 올린다.
+    d.rounded_rectangle([540,2114,730,2148],radius=4,fill=(40,60,50),outline=(15,15,17),width=3)
+    layout.setdefault('displays',[]).append({'for':'sampler','rect':[540,2114,190,34]})
+
 # 눈금(손그림 단서) + 노이즈 텍스처
 for k in layout['knobs']:
     cx,cy,r=k['cx'],k['cy'],k['r']

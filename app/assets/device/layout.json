@@ -1,7 +1,7 @@
 {
  "size": [
   720,
-  2000
+  2220
  ],
  "knobs": [
   {
@@ -387,6 +387,62 @@
    "section": "poly",
    "cx": 628,
    "cy": 1886,
+   "r": 25
+  },
+  {
+   "name": "SELECT",
+   "section": "sampler",
+   "cx": 103,
+   "cy": 2103,
+   "r": 25
+  },
+  {
+   "name": "TUNE",
+   "section": "sampler",
+   "cx": 178,
+   "cy": 2103,
+   "r": 25
+  },
+  {
+   "name": "START",
+   "section": "sampler",
+   "cx": 253,
+   "cy": 2103,
+   "r": 25
+  },
+  {
+   "name": "LOOP",
+   "section": "sampler",
+   "cx": 328,
+   "cy": 2103,
+   "r": 25
+  },
+  {
+   "name": "ATTACK",
+   "section": "sampler",
+   "cx": 403,
+   "cy": 2103,
+   "r": 25
+  },
+  {
+   "name": "RELEASE",
+   "section": "sampler",
+   "cx": 478,
+   "cy": 2103,
+   "r": 25
+  },
+  {
+   "name": "TONE",
+   "section": "sampler",
+   "cx": 553,
+   "cy": 2103,
+   "r": 25
+  },
+  {
+   "name": "LEVEL",
+   "section": "sampler",
+   "cx": 628,
+   "cy": 2103,
    "r": 25
   }
  ],
@@ -940,6 +996,15 @@
     128,
     23
    ]
+  },
+  {
+   "for": "sampler",
+   "rect": [
+    36,
+    2017,
+    128,
+    23
+   ]
   }
  ],
  "panels": [
@@ -1002,6 +1067,15 @@
    "rect": [
     22,
     1790,
+    675,
+    200
+   ]
+  },
+  {
+   "name": "sampler",
+   "rect": [
+    22,
+    2008,
     675,
     200
    ]
@@ -1267,6 +1341,15 @@
     75,
     32
    ]
+  },
+  {
+   "for": "sampler",
+   "rect": [
+    506,
+    2013,
+    178,
+    32
+   ]
   }
  ],
  "scope": {
@@ -1332,6 +1415,11 @@
     "mixer",
     "fx2"
    ]
+  },
+  "v5": {
+   "wire": "wire.py 720x2220",
+   "module": "sampler",
+   "note": "P5-sampler-ui \u2014 \ud328\ub110 \uadf8\ub9bc\uc740 \ud6c4\uc18d \ucc44\uc0c9 \ub77c\uc6b4\ub4dc"
   }
  }
 }

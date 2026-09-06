@@ -19,16 +19,18 @@ import (
 	"time"
 )
 
-const smpTestSlot = 8 // 기본 랙이 쓰는 0..7 밖의 빈 슬롯
+const smpTestSlot = 9 // 기본 랙이 쓰는 0..8 밖의 빈 슬롯(8 = SlotSampler)
 
-// addSamplerRack — 슬롯 8에 샘플러를 놓고 Fx 직결 입력(포트 1 — 드럼과 같은 자리)에 1.0으로 잇는다.
-func addSamplerRack(t *testing.T, e *Engine) {
+// moveSamplerTo — 기본 랙 샘플러(슬롯 8)를 뽑아 slot에 다시 놓고 Fx 직결 입력(포트 1)에 1.0으로 잇는다.
+// 인스턴스는 1개(kindCap)라 "새로 하나 더 놓기"는 안 된다 — 옮기는 것이 유일한 배치 시나리오다.
+func moveSamplerTo(t *testing.T, e *Engine, slot uint8) {
 	t.Helper()
-	e.Apply(Cmd{Kind: AddDevice, A: smpTestSlot, B: uint8(KindSampler)})
-	if e.rack.kind[smpTestSlot] != KindSampler {
-		t.Fatalf("AddDevice(%d, KindSampler) 실패 — kind=%d", smpTestSlot, e.rack.kind[smpTestSlot])
+	e.Apply(Cmd{Kind: RemoveDevice, A: SlotSampler})
+	e.Apply(Cmd{Kind: AddDevice, A: slot, B: uint8(KindSampler)})
+	if e.rack.kind[slot] != KindSampler {
+		t.Fatalf("AddDevice(%d, KindSampler) 실패 — kind=%d", slot, e.rack.kind[slot])
 	}
-	e.Apply(Cmd{Kind: Connect, A: smpTestSlot, B: SlotFx, C: 0 | 1<<4, D: uint8(Unbound), V: 1})
+	e.Apply(Cmd{Kind: Connect, A: slot, B: SlotFx, C: 0 | 1<<4, D: uint8(Unbound), V: 1})
 }
 
 // renderPeak — n블록 렌더의 최대 |샘플|.
@@ -46,13 +48,16 @@ func renderPeak(e *Engine, blocks int) float32 {
 	return peak
 }
 
-// 1. 기본 랙에는 샘플러가 없다 — 이 라운드가 기본값 해시를 건드리지 않는 이유.
-func TestSamplerNotInDefaultRack(t *testing.T) {
+// 1. 기본 랙 슬롯 8이 샘플러다(P5-sampler-ui). 기본 스텝 패턴이 비어 있어 출력이 정확히 +0이고,
+// 합산 규칙("첫 케이블 대입, 이후 덧셈")에서 x+(+0)이 x와 비트 동일한 한 기본값 해시는 불변이다
+// — 실측으로 불변이었다(fx2_test.go TestFx2DefaultHash가 그 단언이고, 여기서는 배치만 잰다).
+func TestSamplerInDefaultRack(t *testing.T) {
 	e := New(1)
-	for s := 0; s < RackSlots; s++ {
-		if e.rack.kind[s] == KindSampler {
-			t.Fatalf("기본 랙 슬롯 %d에 샘플러가 있다 — 이 라운드 계약은 '기본 랙 불변'이다", s)
-		}
+	if e.rack.kind[SlotSampler] != KindSampler {
+		t.Fatalf("기본 랙 슬롯 %d가 샘플러가 아니다: kind=%d", SlotSampler, e.rack.kind[SlotSampler])
+	}
+	if e.smp[0].active() {
+		t.Fatalf("기본 랙 샘플러가 아무 것도 안 눌렀는데 울린다")
 	}
 	if kindCap[KindSampler] != 1 || kindPorts[KindSampler] != [2]uint8{0, 1} {
 		t.Fatalf("포트·인스턴스 표: cap=%d ports=%v (기대 1, [0 1])", kindCap[KindSampler], kindPorts[KindSampler])
@@ -65,7 +70,7 @@ func TestSamplerRackAudible(t *testing.T) {
 	basePeak := renderPeak(base, 200)
 
 	e := New(1)
-	addSamplerRack(t, e)
+	moveSamplerTo(t, e, smpTestSlot)
 	// 스텝 0·4·8·12에 게이트(4분음). note 0 = 그 마디 코드 루트.
 	for st := 0; st < Steps; st += 4 {
 		e.Apply(Cmd{Kind: DeviceStep, A: smpTestSlot, B: uint8(st), C: 0, D: StepGate})
@@ -83,7 +88,7 @@ func TestSamplerRackAudible(t *testing.T) {
 // 3. RemoveDevice — 빠진 장치는 즉시 조용하고, 닿은 케이블도 사라진다.
 func TestSamplerRackRemoveSilences(t *testing.T) {
 	e := New(1)
-	addSamplerRack(t, e)
+	moveSamplerTo(t, e, smpTestSlot)
 	nWith := e.NumCables()
 	e.Apply(Cmd{Kind: DeviceStep, A: smpTestSlot, B: 0, C: 0, D: StepGate})
 	renderPeak(e, 40)
@@ -110,7 +115,7 @@ func TestSamplerRackRemoveSilences(t *testing.T) {
 // 4. Transport 정지 → 릴리즈. 폴리와 같은 규칙이다.
 func TestSamplerRackTransportStop(t *testing.T) {
 	e := New(1)
-	addSamplerRack(t, e)
+	moveSamplerTo(t, e, smpTestSlot)
 	e.Apply(Cmd{Kind: DeviceParam, A: smpTestSlot, B: SmpLoop, V: 1})         // 루프 모드
 	e.Apply(Cmd{Kind: DeviceParam, A: smpTestSlot, B: SmpSelect, V: 5.0 / 7}) // 슬롯 5 TAPE(loop < n)
 	e.Apply(Cmd{Kind: DeviceStep, A: smpTestSlot, B: 0, C: 0, D: StepGate})
@@ -132,7 +137,7 @@ func TestSamplerRackTransportStop(t *testing.T) {
 // 읽은 뒤 계수까지 유도되는지(applyDevParam 경로)를 함께 잰다.
 func TestSamplerRackStateRoundTrip(t *testing.T) {
 	e := New(7)
-	addSamplerRack(t, e)
+	moveSamplerTo(t, e, smpTestSlot)
 	e.Apply(Cmd{Kind: DeviceParam, A: smpTestSlot, B: SmpSelect, V: 3.0 / 7})
 	e.Apply(Cmd{Kind: DeviceParam, A: smpTestSlot, B: SmpTone, V: 0.25})
 	e.Apply(Cmd{Kind: DeviceStep, A: smpTestSlot, B: 5, C: 9, D: StepGate | StepAccent})
@@ -164,7 +169,7 @@ func TestSamplerRackStateRoundTrip(t *testing.T) {
 // 6. 샘플러가 꽂힌 랙의 렌더도 무할당(핫 루프 계약).
 func TestSamplerRackNoAllocs(t *testing.T) {
 	e := New(1)
-	addSamplerRack(t, e)
+	moveSamplerTo(t, e, smpTestSlot)
 	for st := 0; st < Steps; st += 2 {
 		e.Apply(Cmd{Kind: DeviceStep, A: smpTestSlot, B: uint8(st), C: 0, D: StepGate})
 	}

@@ -19,24 +19,26 @@ import "testing"
 func TestRackDefault(t *testing.T) {
 	e := New(1)
 	r := &e.rack
-	want := [...]DeviceKind{KindBass, KindBass, KindDrums, KindFx, KindReverb, KindChorus, KindMain, KindPoly}
+	want := [...]DeviceKind{KindBass, KindBass, KindDrums, KindFx, KindReverb, KindChorus, KindMain, KindPoly, KindSampler}
 	for s := range want {
 		if e.Kind(s) != want[s] {
 			t.Fatalf("슬롯 %d 종류 %d, want %d", s, e.Kind(s), want[s])
 		}
 	}
-	if e.Kind(8) != KindNone || e.Kind(-1) != KindNone || e.Kind(RackSlots) != KindNone {
+	if e.Kind(9) != KindNone || e.Kind(-1) != KindNone || e.Kind(RackSlots) != KindNone {
 		t.Fatal("빈 슬롯·범위 밖은 KindNone")
 	}
-	// 드라이 4 + 딜레이 센드 8 + 리버브 센드 8 + 코러스 2 + 리턴 6 = 28, 폴리(드라이·딜레이·리버브·코러스) 4 = 32
-	if e.NumCables() != 32 {
-		t.Fatalf("케이블 %d, want 32", e.NumCables())
+	// 드라이 4 + 딜레이 센드 8 + 리버브 센드 8 + 코러스 2 + 리턴 6 = 28, 폴리(드라이·딜레이·리버브·코러스) 4 = 32,
+	// 샘플러(드라이·딜레이·리버브) 3 = 35 (2026-09-07 P5-sampler-ui)
+	if e.NumCables() != 35 {
+		t.Fatalf("케이블 %d, want 35", e.NumCables())
 	}
-	if r.nOrder != 8 {
-		t.Fatalf("order 길이 %d, want 8", r.nOrder)
+	if r.nOrder != 9 {
+		t.Fatalf("order 길이 %d, want 9", r.nOrder)
 	}
-	// Kahn 최소 슬롯 우선: 0 1 2 → Fx(3)는 폴리(7)를 기다린다 → 7이 3 앞에 온다
-	wantOrder := [...]uint8{0, 1, 2, 7, 3, 4, 5, 6}
+	// Kahn 최소 슬롯 우선: 0 1 2 7 다음에 준비된 것 중 최소는 코러스(5)다 — 코러스 입력은
+	// 베이스 2 + 폴리뿐이라 샘플러(8)를 안 기다린다. Fx(3)·리버브(4)는 8을 기다린다.
+	wantOrder := [...]uint8{0, 1, 2, 7, 5, 8, 3, 4, 6}
 	for i := range wantOrder {
 		if r.order[i] != wantOrder[i] {
 			t.Fatalf("order[%d] = %d, want %d", i, r.order[i], wantOrder[i])
@@ -140,8 +142,8 @@ func TestRackConnectRules(t *testing.T) {
 	if r.connect(SlotFx, 0, SlotReverb, 0, Unbound, ParamSteps) {
 		t.Fatal("순환 케이블이 통과")
 	}
-	if e.NumCables() != m || r.nOrder != 8 {
-		t.Fatalf("순환 거부 뒤 표 %d(want %d)·order %d(want 8) — 되돌리기 실패", e.NumCables(), m, r.nOrder)
+	if e.NumCables() != m || r.nOrder != 9 {
+		t.Fatalf("순환 거부 뒤 표 %d(want %d)·order %d(want 9) — 되돌리기 실패", e.NumCables(), m, r.nOrder)
 	}
 	if !r.disconnect(SlotReverb, 0, SlotFx, 3) || r.disconnect(SlotReverb, 0, SlotFx, 3) {
 		t.Fatal("disconnect 1회 참·2회 거짓이어야")

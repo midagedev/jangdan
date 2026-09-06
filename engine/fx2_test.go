@@ -35,9 +35,9 @@ import (
 // 바이트에 걸리는 변경은 폴리 장치 하나 — 그래프 도입(66dbaba)은 해시 불변으로 따로 증명됐다).
 const p4fx2HashV1 = "ebb5e1c457d6cc8ca33d6f80df28452668484bbe13d8a7fdcc3d15148f13ebaf"
 
-// 1. 기본값 해시 불변(재기준) — §13.1: 이 해시가 바뀌면 기본값에서 바이트에 닿는
-//    변경이 섞인 것이다(딜레이 센드 외的一切). native 렌더(cmd/render)·워클릿 wasm
-//    (hash-node)·브라우저(hash-browser) 셋 다 이 값이어야 한다(계약).
+//  1. 기본값 해시 불변(재기준) — §13.1: 이 해시가 바뀌면 기본값에서 바이트에 닿는
+//     변경이 섞인 것이다(딜레이 센드 외的一切). native 렌더(cmd/render)·워클릿 wasm
+//     (hash-node)·브라우저(hash-browser) 셋 다 이 값이어야 한다(계약).
 func TestFx2DefaultHash(t *testing.T) {
 	s := renderSeconds(t, 1, 30)
 	b := make([]byte, 4*len(s))
@@ -50,13 +50,16 @@ func TestFx2DefaultHash(t *testing.T) {
 	}
 }
 
-// 2. 센드 0 리버브·코러스는 비트 단위 바이패스 — dry를 그대로(±0 부호 포함) 돌려준다.
-//    "0을 더한다"가 아니라 "더하지 않는다"가 계약(§13.1 해시 근거). 랙(rack.go)에서는
-//    게인>0 입력 케이블이 없는 장치가 live=false가 되고 그 출력 케이블은 Main 합산에서
-//    건너뛰어진다 — 포트 값을 직접 심어 sumInputs로 단언한다.
+//  2. 센드 0 리버브·코러스는 비트 단위 바이패스 — dry를 그대로(±0 부호 포함) 돌려준다.
+//     "0을 더한다"가 아니라 "더하지 않는다"가 계약(§13.1 해시 근거). 랙(rack.go)에서는
+//     게인>0 입력 케이블이 없는 장치가 live=false가 되고 그 출력 케이블은 Main 합산에서
+//     건너뛰어진다 — 포트 값을 직접 심어 sumInputs로 단언한다.
 func TestFx2BusBypassBitIdentity(t *testing.T) {
 	e := New(1)
-	e.Apply(Cmd{Kind: RemoveDevice, A: SlotPoly}) // 폴리의 비결속 센드 케이블을 치워 옛 버스 경로만 남긴다
+	// 비결속 센드를 가진 장치를 치워 옛 버스 경로만 남긴다(2026-09-07 P5-sampler-ui: 샘플러도
+	// 기본 랙에 리버브 비결속 센드 0.30을 갖는다 — 계약 완화가 아니라 테스트 전제의 유지다).
+	e.Apply(Cmd{Kind: RemoveDevice, A: SlotPoly})
+	e.Apply(Cmd{Kind: RemoveDevice, A: SlotSampler})
 	for p := Part(0); p < NumParts; p++ {
 		e.SetParam(RevSend(p), 0)
 	}
@@ -67,7 +70,7 @@ func TestFx2BusBypassBitIdentity(t *testing.T) {
 		t.Fatal("센드 전부 0인데 리버브/코러스가 live")
 	}
 	negz := float32(math.Copysign(0, -1))
-	r.port[SlotReverb] = [MaxOutPorts]float32{0.5, 0.5}    // 죽은 장치의 잔존 포트 값 — 닿으면 안 된다
+	r.port[SlotReverb] = [MaxOutPorts]float32{0.5, 0.5} // 죽은 장치의 잔존 포트 값 — 닿으면 안 된다
 	r.port[SlotChorus] = [MaxOutPorts]float32{negz, 0.25}
 	for _, dry := range [...]float32{negz, 0, 0.4922174, -0.7} {
 		r.port[SlotFx][0], r.port[SlotFx][1] = dry, -dry
@@ -98,12 +101,12 @@ func TestFx2BusBypassBitIdentity(t *testing.T) {
 	}
 }
 
-// 3. 리버브 꼬리 — RevSend(BD)=1·RevMix=1에서 BD 단발 트리거(첫 블록 뒤 스텝 0
-//    게이트를 지워 다음 바 2.0s 재트리거를 막는다) 뒤: (a) 리버브 최단 경로
-//    (프리딜레이 960 + 최단 콤 1422)가 열리기 전인 처음 2382샘플은 대조 엔진(센드 0)과
-//    수치 차 0(dry 보존 — busClamp가 dry를 깎지 않는 단언), (b) [50ms..300ms]에서
-//    차 > 0(리버브가 운다), (c) [200ms..700ms] 꼬리 > 0.01, (d) [2s..2.2s] ≤ 1e-3
-//    (−60dB — 실측 0.00067, 이 중 리버브 기여 0.00015).
+//  3. 리버브 꼬리 — RevSend(BD)=1·RevMix=1에서 BD 단발 트리거(첫 블록 뒤 스텝 0
+//     게이트를 지워 다음 바 2.0s 재트리거를 막는다) 뒤: (a) 리버브 최단 경로
+//     (프리딜레이 960 + 최단 콤 1422)가 열리기 전인 처음 2382샘플은 대조 엔진(센드 0)과
+//     수치 차 0(dry 보존 — busClamp가 dry를 깎지 않는 단언), (b) [50ms..300ms]에서
+//     차 > 0(리버브가 운다), (c) [200ms..700ms] 꼬리 > 0.01, (d) [2s..2.2s] ≤ 1e-3
+//     (−60dB — 실측 0.00067, 이 중 리버브 기여 0.00015).
 func TestFx2ReverbTail(t *testing.T) {
 	run := func(revOn bool) []float32 {
 		e := New(1)
@@ -141,7 +144,7 @@ func TestFx2ReverbTail(t *testing.T) {
 		t.Fatalf("최단 경로 열리기 전 차 %v > 0 — 리버브가 프리딜레이를 우회함", pre)
 	}
 	mid := float32(0)
-	for i := 2 * (SampleRate*50/1000); i < 2*(SampleRate*300/1000); i++ {
+	for i := 2 * (SampleRate * 50 / 1000); i < 2*(SampleRate*300/1000); i++ {
 		if d := abs32(a[i] - b[i]); d > mid {
 			mid = d
 		}
@@ -170,8 +173,8 @@ func TestFx2ReverbTail(t *testing.T) {
 	t.Logf("꼬리: mid diff %v, [200..700ms] %v, [2s..] %v", mid, tail, late)
 }
 
-// 4. 코러스 — ChoSendA=1·ChoDepth=1에서 출력이 dry와 다르고 |out| ≤ 0.9903
-//    (리턴이 클립 뒤에 더해져도 마지막 busClip이 상한을 지킨다, §13.2).
+//  4. 코러스 — ChoSendA=1·ChoDepth=1에서 출력이 dry와 다르고 |out| ≤ 0.9903
+//     (리턴이 클립 뒤에 더해져도 마지막 busClip이 상한을 지킨다, §13.2).
 func TestFx2Chorus(t *testing.T) {
 	// 코러스 장치 + Main 합산(케이블 게인 = ChoMix 1 → boundGain 0.8) + busClamp — 랙이 하는
 	// 연산을 그대로 펼친 형태(rack.go sumInputs 규칙: dry 대입 뒤 리턴 덧셈).
@@ -210,8 +213,8 @@ func TestFx2Chorus(t *testing.T) {
 	t.Logf("코러스 peak %v", peak)
 }
 
-// 5. 무할당 — 센드 켠 상태(리버브+코러스+딜레이 센드 전부 활성)의 Render와 버스
-//    SetParam 전 경과(계수 유도 exp2 포함)가 0할당.
+//  5. 무할당 — 센드 켠 상태(리버브+코러스+딜레이 센드 전부 활성)의 Render와 버스
+//     SetParam 전 경과(계수 유도 exp2 포함)가 0할당.
 func TestFx2NoAllocs(t *testing.T) {
 	e := New(1)
 	e.SetParam(RevSend(BD), 0.8)

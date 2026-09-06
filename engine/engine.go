@@ -107,6 +107,7 @@ func (e *Engine) Reset(seed uint32) {
 	e.smp[0].init(seed ^ 0x1B56C4E9) // 팩은 seed 무관 — 시그니처는 그래프 계약(sampler.go)
 	e.rack.buildDefault()            // 기본 랙(§14.1) — 아래 DefaultParams 적용이 결속 케이블 게인을 채운다
 	e.initDevDefaults(SlotPoly)
+	e.initDevDefaults(SlotSampler)
 	e.playing = true
 	e.keyRoot = uint8(seed % NumKeys) // 세션 조성은 시드가 고른다(resident도 같은 식 seed%12로 SetKey를 낸다)
 	e.pendingKey = e.keyRoot

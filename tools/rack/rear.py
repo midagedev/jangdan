@@ -41,6 +41,7 @@ rows = [
     (4, 'reverb', half(pan['fx2'], True),  (120, 80, 150), ['IN'], ['L', 'R']),
     (5, 'chorus', half(pan['fx2'], False), (120, 80, 150), ['IN'], ['L', 'R']),
     (7, 'poly',   pan['poly'],      (60, 130, 170), [], ['OUT']),
+    (8, 'sampler', pan['sampler'], (170, 90, 120), [], ['OUT']),
 ]
 
 im = Image.new('RGB', (W, H), (26, 25, 28))
