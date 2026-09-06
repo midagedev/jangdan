@@ -150,6 +150,10 @@ func (g *game) updateIntegration() {
 	}
 	// 사용자 손·기기 뷰 반응은 오디오 시작 전에도 잡는다(시작 제스처와 진입이 같은 탭에
 	// 겹치는 창이 있다 — 잠금·텔레메트리가 한 프레임 늦는 것보다 놓치는 게 나쁘다).
+	// 뒷면 전환도 기기 조작이다 — 캡션 3(앞면 조작 안내)을 끄고 유휴 타이머를 되짚는다.
+	if g.mode == modeDevice && g.device.Rear() {
+		g.in.deviceTouched = true
+	}
 	if id, ok := g.device.JustGrabbed(); ok {
 		g.in.res.Lock(id)
 		g.in.deviceTouched = true

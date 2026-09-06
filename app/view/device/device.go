@@ -894,6 +894,10 @@ func (v *View) cacheDisplays(ctx *core.Ctx) {
 // BackTapped — 이 프레임에 이름판(title)이 탭됐는가(main.go가 방 뷰로 복귀).
 func (v *View) BackTapped() bool { return v.back }
 
+// Rear — 뒷면 케이블 뷰 표시 중(§14.3). main.go가 캡션을 끄는 데 쓴다: 첫 접촉 캡션 문구는
+// 앞면 조작 안내라 뒷면 위에 떠 있으면 틀린 안내가 된다(2026-09-06 대표컷에서 관측).
+func (v *View) Rear() bool { return v.rear }
+
 // JustGrabbed — 이 프레임에 사용자가 새로 잡은 노브(MANUAL 잠금용).
 func (v *View) JustGrabbed() (engine.ParamID, bool) { return v.grabID, v.grabOK }
 
