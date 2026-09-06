@@ -3,9 +3,10 @@
 //	init()                              New/Reset — 버퍼 0, 계수 기본
 //	setParam(k int, q float32)          k 0=Delay 1=Drive 2=Comp 3=Master
 //	setTempo(samplesPerStep float64)    딜레이 시간(점8분 = 6스텝) 재계산
-//	process(bass, drums, bdSide, dropDrive float32) (l, r float32)
+//	process(bass, drums, bdSide, dropDrive, delayIn float32) (l, r float32)
 //	    체인: 베이스 사이드체인 덕킹(bdSide 트리거) → 드라이브(+dropDrive·0.2 상당) →
-//	          템포 딜레이 핑퐁 → 마스터 → 소프트클립
+//	          템포 딜레이 핑퐁(입력 = delayIn — 파트별 센드 합, fx2.go가 계산) →
+//	          마스터 → 소프트클립
 //
 // 스테레오 계약: 드라이 신호는 모노 센터(L=R), 딜레이 웻만 좌우가 다르다.
 // 이 파일의 곱셈-덧셈은 전부 mul32(a,b)+z 꼴.
@@ -90,7 +91,7 @@ func (f *fxChain) setTempo(samplesPerStep float64) {
 	f.delaySamp = int(v)
 }
 
-func (f *fxChain) process(bass, drums, bdSide, dropDrive float32) (float32, float32) {
+func (f *fxChain) process(bass, drums, bdSide, dropDrive, delayIn float32) (float32, float32) {
 	// 1) 사이드체인 덕킹(베이스만) — 엔벨로프는 먼저 릴리즈 감쇠하고, 이번 샘플에
 	//    BD 트리거(|bdSide| > 0.05)가 있으면 1로 세운다(어택 0ms ≤ 1ms).
 	f.duck = mul32(f.duck, f.duckRel)
@@ -112,7 +113,7 @@ func (f *fxChain) process(bass, drums, bdSide, dropDrive float32) (float32, floa
 	x2 := mul32(x, x)
 	x = mul32(x, 27+x2) / (mul32(9, x2) + 27)
 	s = mul32(x, f.driveCor)
-	// 3) 템포 딜레이 핑퐁 — 드라이 입력은 L 버퍼로, L 출력은 R 버퍼로 피드백,
+	// 3) 템포 딜레이 핑퐁 — 센드 합 입력(delayIn, §13.2)은 L 버퍼로, L 출력은 R 버퍼로 피드백,
 	//    R 출력은 L 버퍼로. 피드백 경로에 1폴 LP(4kHz)를 스트리밍으로 걸어
 	//    반복마다 어두워진다. q=0(mix=fb=0)이면 완전 바이패스 — 읽기도 건너뛴다.
 	var wl, wr float32
@@ -125,7 +126,7 @@ func (f *fxChain) process(bass, drums, bdSide, dropDrive float32) (float32, floa
 		rOut := f.bufR[r]
 		f.fbLPzL = mul32(f.fbLPc, lOut-f.fbLPzL) + f.fbLPzL
 		f.fbLPzR = mul32(f.fbLPc, rOut-f.fbLPzR) + f.fbLPzR
-		f.bufL[f.wpos] = s + mul32(f.delayFB, f.fbLPzR)
+		f.bufL[f.wpos] = delayIn + mul32(f.delayFB, f.fbLPzR)
 		f.bufR[f.wpos] = mul32(f.delayFB, f.fbLPzL)
 		f.wpos++
 		if f.wpos >= delayBufLen {

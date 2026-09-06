@@ -20,8 +20,8 @@
 // | 트랜스포트 정지(동결·aenv 감쇠)       | TestTransportStopPlay: 10블록 Step/Bar 불변·aenv 감소·FlagBar 없음 | Render의 playing 게이트 제거 시 위치 동결 단언 실패(/tmp 변이 M5 실측) |
 // | 트랜스포트 재생(스텝 0·바 유지)       | TestTransportStopPlay: Step()==0, Bar() 유지, FlagBar | started=false 리셋 제거 시 Step()≠0으로 실패 |
 // | 트랜스포트 멱등                      | TestTransportStopPlay: 재생 중 A:1 무동작·정지 중 A:0 무동작 | 가드 제거 시 재생 중 A:1이 스텝을 0으로 되돌려 실패 |
-// | 상태 v2 왕복                         | TestStateV2RoundTrip: key·mode·dir·playing·코드 8 보존 | WriteState의 코드 루프 건너뛰면 Chord(2) 불일치 실패(/tmp 변이 M6 실측) |
-// | 상태 v2 'J','1' 거부·재정규화         | TestStateV2RoundTrip: v1 헤더 false, 도수 7→0, 모드·방향 3→0 | ReadState의 %7·범위 검사 제거 시 실패 |
+// | 상태 v3 왕복(P4-fx2 매직 승격)         | TestStateV3RoundTrip: key·mode·dir·playing·코드 8 보존 | WriteState의 코드 루프 건너뛰면 Chord(2) 불일치 실패(/tmp 변이 M6 실측) |
+// | 상태 v3 'J','1' 거부·재정규화         | TestStateV3RoundTrip: v1 헤더 false, 도수 7→0, 모드·방향 3→0 | ReadState의 %7·범위 검사 제거 시 실패 |
 // | 결정론(화성 Cmd 이력 포함)            | TestDeterminismWithHarmonyCmds: 300블록 비트 동일    | 두 실행 중 하나에 Cmd 하나를 더 넣으면 불일치 실패(기존 #8과 동일 원리) |
 // | 무할당(ARP·CHORD 경로)               | TestHarmonyNoAllocs: Render·Apply AllocsPerRun==0    | noteOnChord에 make 1줄 삽입 시 실패(원리는 engine_test #3와 동일) |
 package engine
@@ -474,7 +474,7 @@ func TestTransportStopPlay(t *testing.T) {
 }
 
 // 12. 상태 v2 왕복 + 'J','1' 거부 + 범위 밖 바이트 재정규화.
-func TestStateV2RoundTrip(t *testing.T) {
+func TestStateV3RoundTrip(t *testing.T) {
 	a := New(5)
 	a.Apply(Cmd{Kind: SetKey, A: 3})
 	a.Apply(Cmd{Kind: SetChord, A: 2, B: 2, C: ChordSeventh})
@@ -484,8 +484,8 @@ func TestStateV2RoundTrip(t *testing.T) {
 	if n := a.WriteState(buf[:]); n != StateSize {
 		t.Fatalf("WriteState %d", n)
 	}
-	if buf[0] != 'J' || buf[1] != '2' {
-		t.Fatalf("매직 %q%q — want J2", buf[0], buf[1])
+	if buf[0] != 'J' || buf[1] != '3' {
+		t.Fatalf("매직 %q%q — want J3(P4-fx2 v3)", buf[0], buf[1])
 	}
 	f := New(9)
 	if !f.ReadState(buf[:]) {

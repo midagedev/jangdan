@@ -32,8 +32,45 @@ const (
 	Comp   ParamID = Delay + 2              // 30
 	Master ParamID = Delay + 3              // 31
 	Tempo  ParamID = Delay + 4              // 32
-	NumParams ParamID = Tempo + 1           // 33
 )
+
+// 믹서·리버브·코러스 버스(§13.1 — 기존 ID 0..32 불변, 뒤에 덧붙인다).
+// RevSend/DelaySend는 파트별 8개(RevSendBase+p, p = Part 0..7), 코러스 센드는
+// 베이스 A/B 두 개뿐이다(§13.2: choIn = bassA'·choA + bassB'·choB).
+const (
+	BassALevel ParamID = Tempo + 1 // 33 — 베이스 A 채널 레벨(프리 FX). 기본 1.0 = 항등
+	BassBLevel ParamID = Tempo + 2 // 34 — 베이스 B 채널 레벨
+
+	RevSendBase ParamID = Tempo + 3               // 35 — RevSend(p), p = Part 0..7
+	RevSize     ParamID = RevSendBase + ParamID(NumParts) // 43 — 콤 길이 배율·피드백
+	RevDamp     ParamID = RevSize + 1             // 44 — 콤 피드백 LP 차단(12k→2k Hz)
+	RevMix      ParamID = RevSize + 2             // 45 — 리버브 리턴 레벨(×0..0.8)
+	ChoSendA    ParamID = RevSize + 3             // 46 — 베이스 A 코러스 센드
+	ChoSendB    ParamID = RevSize + 4             // 47 — 베이스 B 코러스 센드
+	ChoRate     ParamID = RevSize + 5             // 48 — LFO 0.1..3 Hz(지수 0.1·30^q)
+	ChoDepth    ParamID = RevSize + 6             // 49 — 변조 깊이 0..6 ms(기준 12 ms)
+	ChoMix      ParamID = RevSize + 7             // 50 — 코러스 리턴 레벨(×0..0.8)
+
+	DelaySendBase ParamID = ChoMix + 1 // 51 — DelaySend(p), p = Part 0..7
+	NumParams     ParamID = DelaySendBase + ParamID(NumParts) // 59
+)
+
+// RevSend — 파트 p의 리버브 센드 ID(§13.1: 35..42). 범위 밖 파트는 NumParams
+// (setParam·Param이 무시하는 값)로 정규화한다.
+func RevSend(p Part) ParamID {
+	if p >= NumParts {
+		return NumParams
+	}
+	return RevSendBase + ParamID(p)
+}
+
+// DelaySend — 파트 p의 딜레이 센드 ID(§13.1: 51..58). 범위 밖은 RevSend와 같다.
+func DelaySend(p Part) ParamID {
+	if p >= NumParts {
+		return NumParams
+	}
+	return DelaySendBase + ParamID(p)
+}
 
 // 이름 있는 별칭(자주 쓰는 것만). 나머지는 BassAParams+BCutoff 꼴로 조합한다.
 const (
@@ -78,6 +115,26 @@ func DefaultParams() [NumParams]float32 {
 	p[Comp] = 0.4
 	p[Master] = 0.8
 	p[Tempo] = 0.5 // 130 BPM
+	// §13.1 — 믹서·버스. 센드는 전부 0으로 시작해야 한다(위 루프가 0.5를 깔았으니
+	// 명시적으로 0으로 덮는다). 센드 0인 버스는 바이패스 = 기본 출력 바이트 불변의 근거.
+	p[BassALevel] = 1
+	p[BassBLevel] = 1
+	for pt := Part(0); pt < NumParts; pt++ {
+		p[RevSend(pt)] = 0
+		p[DelaySend(pt)] = 0
+	}
+	p[RevSize] = 0.5
+	p[RevDamp] = 0.5
+	p[RevMix] = 0.5
+	p[ChoSendA] = 0
+	p[ChoSendB] = 0
+	p[ChoRate] = 0.4
+	p[ChoDepth] = 0.5
+	p[ChoMix] = 0.5
+	// 딜레이 센드(§13.1): 리드 신트는 기본으로 딜레이에 연결, 드럼은 아니다.
+	// 이 항목만 기본 출력 바이트를 바꾼다(해시 재기준 대상).
+	p[DelaySend(BassA)] = 1
+	p[DelaySend(BassB)] = 0.6
 	return p
 }
 

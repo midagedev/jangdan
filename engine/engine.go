@@ -71,6 +71,7 @@ type Engine struct {
 	bass  [2]bassVoice
 	drums drumKit
 	fx    fxChain
+	bus   mixBus // §13.2 — 센드·리버브·코러스 버스(fx2.go)
 }
 
 // New — 유일한 할당 지점. seed에서 초기 패턴을 만들고 기본 파라미터를 적용한다.
@@ -217,6 +218,8 @@ func (e *Engine) setParamQ(id ParamID, n uint16) {
 		e.samplesPerStep = SampleRate * 60.0 / BPMOf(q) / 4.0
 		e.fx.setTempo(e.samplesPerStep)
 		e.dropDec = float32(1.0 / (8.0 * 16.0 * e.samplesPerStep))
+	case id >= BassALevel: // 33..58 — 믹서·리버브·코러스 버스(fx2.go)
+		e.bus.setParam(id, q)
 	default: // Delay, Drive, Comp, Master
 		e.fx.setParam(int(id-Delay), q)
 	}
@@ -588,16 +591,25 @@ func (e *Engine) arpPeek(p int, st int, idx uint8) uint8 {
 	return 0
 }
 
-// sample — 보이스 합 → FX 체인. 베이스라인에는 드롭 컷오프 부스트(옥타브), FX에는 드롭 드라이브 부스트.
-// 베이스 파트 출력을 partOut에 옆으로 보관한다(레벨 미터 원본 — 호출 순서·합산 식은
-// 그대로라 출력 바이트 불변: b0+b1은 원래의 두 process 결과 덧셈과 같은 연산).
+// sample — 보이스 합 → FX 체인 → 버스 리턴 합(§13.2). 베이스라인에는 드롭 컷오프
+// 부스트(옥타브), FX에는 드롭 드라이브 부스트. 베이스 출력에 채널 레벨을 곱한
+// 뒤(프리 FX — 기본 1.0은 mul32(x,1)==x 항등이라 출력 바이트 불변) partOut에 옆으로
+// 보관한다(레벨 미터 원본 — 미터는 레벨 반영값, §13.2). 파트 8개 값(레벨 반영 베이스 2 +
+// drumKit.last 6)이 센드 합의 입력이다. 합산 식 b0+b1은 원래의 두 process 결과 덧셈과
+// 같은 연산이라 호출 순서 변경 외에는 바이트에 닿지 않는다.
 func (e *Engine) sample() (float32, float32) {
-	b0 := e.bass[0].process(e.dropEnv)
+	b0 := mul32(e.bass[0].process(e.dropEnv), e.bus.lvl[0])
 	e.partOut[0] = b0
-	b1 := e.bass[1].process(e.dropEnv)
+	b1 := mul32(e.bass[1].process(e.dropEnv), e.bus.lvl[1])
 	e.partOut[1] = b1
 	d, bd := e.drums.process(&e.noise)
-	return e.fx.process(b0+b1, d, bd, e.dropEnv)
+	var parts [8]float32
+	parts[0], parts[1] = b0, b1
+	for v := 0; v < NumDrums; v++ {
+		parts[2+v] = e.drums.last[v]
+	}
+	l, r := e.fx.process(b0+b1, d, bd, e.dropEnv, e.bus.delayInput(&parts))
+	return e.bus.process(&parts, l, r)
 }
 
 func abs32(x float32) float32 {

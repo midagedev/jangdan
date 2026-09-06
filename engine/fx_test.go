@@ -32,8 +32,10 @@ import (
 
 // --- 테스트 픽스처(384KB 구조체라 전부 new로 힙) ---
 
-// fxRun — 파라미터 4개와 샘플별 입력 함수로 n샘플 구동.
-func fxRun(delay, drive, comp, master float32, bass, drums, bdSide, dropDrive func(int) float32, n int) ([]float32, []float32) {
+// fxRun — 파라미터 4개와 샘플별 입력 함수로 n샘플 구동. dly는 딜레이 센드 합 입력
+// (P4-fx2 §13.2 이전에는 bass가 드라이브를 거쳐 딜레이에 들어갔다 — 딜레이 경로를
+// 재는 테스트는 같은 신호를 dly로 옮겼고 의미는 동일하다).
+func fxRun(delay, drive, comp, master float32, bass, drums, bdSide, dropDrive, dly func(int) float32, n int) ([]float32, []float32) {
 	f := new(fxChain)
 	f.init()
 	f.setTempo(5538)
@@ -44,7 +46,7 @@ func fxRun(delay, drive, comp, master float32, bass, drums, bdSide, dropDrive fu
 	L := make([]float32, n)
 	R := make([]float32, n)
 	for i := 0; i < n; i++ {
-		l, r := f.process(bass(i), drums(i), bdSide(i), dropDrive(i))
+		l, r := f.process(bass(i), drums(i), bdSide(i), dropDrive(i), dly(i))
 		L[i] = l
 		R[i] = r
 	}
@@ -95,7 +97,7 @@ func dB(y []float32, hz float64) float64 {
 // 1. 바이패스 — 전 노브 0(Master 1)이면 체인은 두 번의 유리식+스케일뿐이다.
 //    FAIL-first: 최종 outClip의 mul32(y, 0.82)를 y로 두면 실패함을 확인했다.
 func TestFxBypass(t *testing.T) {
-	L, R := fxRun(0, 0, 0, 1, constf(0.3), zerof, zerof, zerof, 4800)
+	L, R := fxRun(0, 0, 0, 1, constf(0.3), zerof, zerof, zerof, zerof, 4800)
 	want := float64(outClipScale) * ratF(ratF(0.3))
 	for i := range L {
 		if d := math.Abs(float64(L[i]) - want); d > 1e-3 {
@@ -112,8 +114,8 @@ func TestFxBypass(t *testing.T) {
 //    FAIL-first: 어택 분기 제거 / duckRel=1 / 게인을 합에 적용 — 세 경우 모두 실패 확인.
 func TestFxDucking(t *testing.T) {
 	const n = 24000
-	base, _ := fxRun(0, 0, 1, 1, constf(0.3), zerof, zerof, zerof, n)
-	L, _ := fxRun(0, 0, 1, 1, constf(0.3), zerof, impulsef(1.0, 0), zerof, n)
+	base, _ := fxRun(0, 0, 1, 1, constf(0.3), zerof, zerof, zerof, zerof, n)
+	L, _ := fxRun(0, 0, 1, 1, constf(0.3), zerof, impulsef(1.0, 0), zerof, zerof, n)
 	y0 := base[100]
 	for i := 0; i <= 48; i++ { // 1ms
 		if ratio := float64(L[i]) / float64(y0); ratio > 0.25 {
@@ -131,8 +133,8 @@ func TestFxDucking(t *testing.T) {
 		t.Fatalf("400ms 복귀 %.4f < 0.95", r)
 	}
 	// 드럼은 덕킹되지 않는다 — bdSide 유무와 무관하게 바이트 동일
-	d0, _ := fxRun(0, 0, 1, 1, zerof, constf(0.3), zerof, zerof, n)
-	d1, _ := fxRun(0, 0, 1, 1, zerof, constf(0.3), impulsef(1.0, 0), zerof, n)
+	d0, _ := fxRun(0, 0, 1, 1, zerof, constf(0.3), zerof, zerof, zerof, n)
+	d1, _ := fxRun(0, 0, 1, 1, zerof, constf(0.3), impulsef(1.0, 0), zerof, zerof, n)
 	for i := range d0 {
 		if d0[i] != d1[i] {
 			t.Fatalf("드럼 경로가 덕킹됨: 샘플 %d %v vs %v", i, d0[i], d1[i])
@@ -147,7 +149,7 @@ func TestFxDriveHarmonics(t *testing.T) {
 		return 0.5 * float32(math.Sin(2*math.Pi*100*float64(i)/48000))
 	}
 	h := func(drive float32) float64 {
-		L, _ := fxRun(0, drive, 0, 1, sine, zerof, zerof, zerof, 48000)
+		L, _ := fxRun(0, drive, 0, 1, sine, zerof, zerof, zerof, zerof, 48000)
 		return dB(L, 300) - dB(L, 100)
 	}
 	d0, d1 := h(0), h(1)
@@ -161,7 +163,7 @@ func TestFxDriveHarmonics(t *testing.T) {
 func TestFxDelayTime(t *testing.T) {
 	const D = 33228
 	n := 3*D + 100
-	L, R := fxRun(0.6, 0, 0, 1, impulsef(0.5, 0), zerof, zerof, zerof, n)
+	L, R := fxRun(0.6, 0, 0, 1, zerof, zerof, zerof, zerof, impulsef(0.5, 0), n)
 	best, bi := float32(0), -1
 	for i := 1; i < n; i++ {
 		if a := abs32(L[i]); a > best {
@@ -197,7 +199,7 @@ func TestFxDelayFeedbackLP(t *testing.T) {
 			}
 			return 0
 		}
-		L, R := fxRun(0.6, 0, 0, 1, burst, zerof, zerof, zerof, 2*D+300)
+		L, R := fxRun(0.6, 0, 0, 1, zerof, zerof, zerof, zerof, burst, 2*D+300)
 		a1, a2 := 0.0, 0.0
 		for i := D - 240; i <= D+240; i++ {
 			if a := float64(abs32(L[i])); a > a1 {
@@ -229,18 +231,18 @@ func TestFxDelayBypass(t *testing.T) {
 	f.init()
 	f.setTempo(5538)
 	f.setParam(0, 0.6)
-	for i := 0; i < 60000; i++ { // 버퍼를 먼저 채운다
-		f.process(0.3, 0, 0, 0)
+	for i := 0; i < 60000; i++ { // 버퍼를 먼저 채운다(딜레이 입력으로)
+		f.process(0, 0, 0, 0, 0.3)
 	}
 	f.setParam(0, 0)
 	n := 2*f.delaySamp + 100
 	L, R := make([]float32, n), make([]float32, n)
 	for i := 0; i < n; i++ {
-		var bass float32
+		var dly float32
 		if i == 0 {
-			bass = 0.5
+			dly = 0.5
 		}
-		L[i], R[i] = f.process(bass, 0, 0, 0)
+		L[i], R[i] = f.process(0, 0, 0, 0, dly)
 	}
 	for i := 1; i < n; i++ {
 		if abs32(L[i]) > 1e-6 || abs32(R[i]) > 1e-6 {
@@ -252,8 +254,8 @@ func TestFxDelayBypass(t *testing.T) {
 // 7. 마스터 선형 — Master 0.5 출력이 Master 1의 0.5배 ±1%(미포화 입력 0.1).
 //    FAIL-first: 마스터 곱을 지우면 비가 1.0이 되어 실패함을 확인했다.
 func TestFxMasterLinear(t *testing.T) {
-	y1, _ := fxRun(0, 0, 0, 1, constf(0.1), zerof, zerof, zerof, 100)
-	yh, _ := fxRun(0, 0, 0, 0.5, constf(0.1), zerof, zerof, zerof, 100)
+	y1, _ := fxRun(0, 0, 0, 1, constf(0.1), zerof, zerof, zerof, zerof, 100)
+	yh, _ := fxRun(0, 0, 0, 0.5, constf(0.1), zerof, zerof, zerof, zerof, 100)
 	ratio := float64(yh[50]) / float64(y1[50])
 	if math.Abs(ratio-0.5) > 0.005 {
 		t.Fatalf("Master 0.5 비 %.4f, want 0.5±0.005", ratio)
@@ -277,7 +279,7 @@ func TestFxBounds(t *testing.T) {
 		}
 	}
 	// 상한: 최대 입력 + 전 이펙트 최대, 2초
-	L, R := fxRun(1, 1, 1, 1, constf(8), constf(8), impulseTrain(1.0, 4800, 96000), constf(1), 96000)
+	L, R := fxRun(1, 1, 1, 1, constf(8), constf(8), impulseTrain(1.0, 4800, 96000), constf(1), constf(8), 96000)
 	check("상한", L, R)
 	// 81조합 × 임펄스·상수
 	for _, dl := range [...]float32{0, 0.5, 1} {
@@ -285,9 +287,9 @@ func TestFxBounds(t *testing.T) {
 			for _, cp := range [...]float32{0, 0.5, 1} {
 				for _, ma := range [...]float32{0, 0.5, 1} {
 					imp := impulsef(0.8, 0, 20000)
-					L, R := fxRun(dl, dr, cp, ma, imp, impulsef(-0.8, 0, 20000), imp, constf(1), 24000)
+					L, R := fxRun(dl, dr, cp, ma, imp, impulsef(-0.8, 0, 20000), imp, constf(1), imp, 24000)
 					check("81조합 임펄스", L, R)
-					L, R = fxRun(dl, dr, cp, ma, constf(0.5), constf(0.3), impulseTrain(1.0, 12000, 24000), constf(1), 24000)
+					L, R = fxRun(dl, dr, cp, ma, constf(0.5), constf(0.3), impulseTrain(1.0, 12000, 24000), constf(1), constf(0.5), 24000)
 					check("81조합 상수", L, R)
 				}
 			}
@@ -325,8 +327,8 @@ func TestFxNoAllocDeterminism(t *testing.T) {
 	f.setTempo(5538)
 	f.setParam(0, 0.5)
 	f.setParam(1, 0.3)
-	f.process(0.2, 0.1, 0, 0)
-	if n := testing.AllocsPerRun(1000, func() { f.process(0.2, 0.1, 0.4, 0.5) }); n != 0 {
+	f.process(0.2, 0.1, 0, 0, 0.2)
+	if n := testing.AllocsPerRun(1000, func() { f.process(0.2, 0.1, 0.4, 0.5, 0.2) }); n != 0 {
 		t.Fatalf("process 할당: %v (무할당 계약 위반)", n)
 	}
 	if n := testing.AllocsPerRun(1000, func() { f.setParam(1, 0.4) }); n != 0 {
@@ -356,7 +358,7 @@ func TestFxNoAllocDeterminism(t *testing.T) {
 			if i < 480 {
 				b = 0.5 * float32(math.Sin(2*math.Pi*float64(i)*220/48000))
 			}
-			L[i], R[i] = g.process(b, 0.2, bd, dd)
+			L[i], R[i] = g.process(b, 0.2, bd, dd, b)
 		}
 		return L, R
 	}

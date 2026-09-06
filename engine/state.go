@@ -2,40 +2,42 @@
 //
 // 키프레임은 바 경계의 제어 상태다: 파라미터·패턴·슬롯·뮤트·조성·코드 트랙·모드·트랜스포트.
 // 보이스 내부 상태(필터 메모리·엔벨로프·딜레이 버퍼)는 포함하지 않는다 — 복원은 바 경계에서만 의미가 있다.
-// 레이아웃 v2(리틀엔디언, 고정 StateSize 바이트):
+// 레이아웃 v3(리틀엔디언, 고정 StateSize 바이트 — §13.1 파라미터 33→59로 v2에서 +52):
 //
-//	[0..2)          magic 'J','2'
-//	[2..68)         params[33] uint16
-//	[68..580)       bass 패턴 2파트 × 8슬롯 × 16스텝 × (note u8 = 도수 표기, flags u8)
-//	[580..676)      drum 패턴 6보이스 × 16스텝 × flags u8
-//	[676..678)      선택 슬롯 BassA, BassB
-//	[678]           뮤트 비트(bit part)
-//	[679]           keyRoot(0..11)
-//	[680..682)      파트별 mode | dir<<2 (BassA, BassB)
-//	[682]           playing(0|1)
-//	[683..691)      코드 트랙 8마디 × (degree | flags<<3)
-//	[691..696)      예약(0)
+//	[0..2)          magic 'J','3'
+//	[2..120)        params[59] uint16
+//	[120..632)      bass 패턴 2파트 × 8슬롯 × 16스텝 × (note u8 = 도수 표기, flags u8)
+//	[632..728)      drum 패턴 6보이스 × 16스텝 × flags u8
+//	[728..730)      선택 슬롯 BassA, BassB
+//	[730]           뮤트 비트(bit part)
+//	[731]           keyRoot(0..11)
+//	[732..734)      파트별 mode | dir<<2 (BassA, BassB)
+//	[734]           playing(0|1)
+//	[735..743)      코드 트랙 8마디 × (degree | flags<<3)
+//	[743..748)      예약(0)
 //
 // ReadState는 검증 후 폐기가 아니라 재정규화한다(note>MaxNote → MaxNote, flags 마스킹, 슬롯 &7,
-// 키 %12, 도수 %7, 모드·방향 범위 밖은 0). v1('J','1', 684바이트)은 거부한다 — 지속 저장된
-// 키프레임은 없고(메모리·리플레이 전용) note 의미가 절대음→도수로 바뀌어 호환이 없다.
+// 키 %12, 도수 %7, 모드·방향 범위 밖은 0). v2('J','2', 696바이트) 이하는 거부한다 — 새
+// 파라미터(믹서·버스 26개)의 기본값 해석이 없어 반쪽 상태가 되고, 지속 저장된
+// 키프레임은 없다(메모리·리플레이 전용 — 로그 재생이 정본). v1('J','1', 684바이트)도
+// 거부다(v1 당시부터 note 의미가 절대음→도수로 바뀌어 호환이 없다).
 // 이 파일에는 곱셈-덧셈이 없다.
 package engine
 
 const (
 	stateMagic0 = 'J'
-	stateMagic1 = '2'
+	stateMagic1 = '3'
 
 	offParams  = 2
-	offBassPat = offParams + 2*int(NumParams)        // 68
-	offDrumPat = offBassPat + 2*PatternSlots*Steps*2 // 580
-	offSlots   = offDrumPat + NumDrums*Steps         // 676
-	offMute    = offSlots + 2                        // 678
-	offKey     = offMute + 1                         // 679
-	offMode    = offKey + 1                          // 680 (2바이트)
-	offPlaying = offMode + 2                         // 682
-	offChord   = offPlaying + 1                      // 683 (8바이트)
-	StateSize  = offChord + ChordBars + 5            // 696
+	offBassPat = offParams + 2*int(NumParams)        // 120
+	offDrumPat = offBassPat + 2*PatternSlots*Steps*2 // 632
+	offSlots   = offDrumPat + NumDrums*Steps         // 728
+	offMute    = offSlots + 2                        // 730
+	offKey     = offMute + 1                         // 731
+	offMode    = offKey + 1                          // 732 (2바이트)
+	offPlaying = offMode + 2                         // 734
+	offChord   = offPlaying + 1                      // 735 (8바이트)
+	StateSize  = offChord + ChordBars + 5            // 748
 )
 
 // WriteState — 현재 제어 상태를 dst에 쓴다. len(dst) < StateSize이면 0을 돌려주고 아무것도 쓰지 않는다.
