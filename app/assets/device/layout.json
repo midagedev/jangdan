@@ -1,7 +1,7 @@
 {
  "size": [
   720,
-  1800
+  2000
  ],
  "knobs": [
   {
@@ -332,6 +332,62 @@
    "cx": 638,
    "cy": 1638,
    "r": 32
+  },
+  {
+   "name": "CUTOFF",
+   "section": "poly",
+   "cx": 103,
+   "cy": 1886,
+   "r": 25
+  },
+  {
+   "name": "RESO",
+   "section": "poly",
+   "cx": 178,
+   "cy": 1886,
+   "r": 25
+  },
+  {
+   "name": "ENV",
+   "section": "poly",
+   "cx": 253,
+   "cy": 1886,
+   "r": 25
+  },
+  {
+   "name": "ATTACK",
+   "section": "poly",
+   "cx": 328,
+   "cy": 1886,
+   "r": 25
+  },
+  {
+   "name": "DECAY",
+   "section": "poly",
+   "cx": 403,
+   "cy": 1886,
+   "r": 25
+  },
+  {
+   "name": "RELEASE",
+   "section": "poly",
+   "cx": 478,
+   "cy": 1886,
+   "r": 25
+  },
+  {
+   "name": "DETUNE",
+   "section": "poly",
+   "cx": 553,
+   "cy": 1886,
+   "r": 25
+  },
+  {
+   "name": "LEVEL",
+   "section": "poly",
+   "cx": 628,
+   "cy": 1886,
+   "r": 25
   }
  ],
  "buttons": [
@@ -875,6 +931,15 @@
     128,
     23
    ]
+  },
+  {
+   "for": "poly",
+   "rect": [
+    36,
+    1800,
+    128,
+    23
+   ]
   }
  ],
  "panels": [
@@ -930,6 +995,15 @@
     1533,
     675,
     240
+   ]
+  },
+  {
+   "name": "poly",
+   "rect": [
+    22,
+    1790,
+    675,
+    200
    ]
   }
  ],

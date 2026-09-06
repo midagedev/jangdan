@@ -7,7 +7,6 @@ spike/worklet/results/
 app/web/app.wasm*
 app/web/wasm_exec.js
 app/web/engine.wasm
-app/web/still.png
 app/.cert/
 app/results/
 app/node_modules/

@@ -1420,8 +1420,8 @@ func TestPolyLabels(t *testing.T) {
 	if got := knobLabel(secPoly, "TEMPO"); got != "TEMPO" {
 		t.Fatalf("표 밖 이름 %q(그대로 예상)", got)
 	}
-	if colPlateBand[6] != (color.NRGBA{R: 60, G: 130, B: 170, A: 255}) {
-		t.Fatalf("poly 띠색 %v((60,130,170) 예상 — 채색 병합 뒤 재조정)", colPlateBand[6])
+	if colPlateBand[6] != (color.NRGBA{R: 42, G: 133, B: 178, A: 255}) {
+		t.Fatalf("poly 띠색 %v((42,133,178) 예상 — 채택 패널 seed 7 띠 중앙값 실측, 2026-09-06 리드 재조정)", colPlateBand[6])
 	}
 	if len(colPlateBand) != 7 {
 		t.Fatalf("띠색 표 %d항(7 예상)", len(colPlateBand))
