@@ -157,7 +157,7 @@ func KnobParam(section, name string) (engine.ParamID, bool) {
 		base = engine.BassAParams
 	case "basslineB":
 		base = engine.BassBParams
-	case "drums": // "BD_LEVEL" / "BD_TUNE"
+	case "drums": // "BD_LEVEL" / "BD_TUNE" — 접미사 화이트리스트(오타 이름이 LEVEL로 묵히는 결함 차단)
 		if len(name) < 4 {
 			return 0, false
 		}
@@ -166,8 +166,12 @@ func KnobParam(section, name string) (engine.ParamID, bool) {
 			return 0, false
 		}
 		id := engine.DrumParams + engine.ParamID(2*v)
-		if name[3:] == "TUNE" {
+		switch name[3:] {
+		case "LEVEL":
+		case "TUNE":
 			id++
+		default:
+			return 0, false
 		}
 		return id, true
 	case "fx":
@@ -184,6 +188,37 @@ func KnobParam(section, name string) (engine.ParamID, bool) {
 			return engine.Tempo, true
 		}
 		return 0, false
+	case "mixer": // §13.1 — REV_<채널> 8 + LEVEL_A/B + CHO_A/B
+		if id, ok := mixerRevSend[name]; ok {
+			return id, true
+		}
+		switch name {
+		case "LEVEL_A":
+			return engine.BassALevel, true
+		case "LEVEL_B":
+			return engine.BassBLevel, true
+		case "CHO_A":
+			return engine.ChoSendA, true
+		case "CHO_B":
+			return engine.ChoSendB, true
+		}
+		return 0, false
+	case "fx2": // §13.1 — 리버브·코러스 파라미터 6
+		switch name {
+		case "REV_SIZE":
+			return engine.RevSize, true
+		case "REV_DAMP":
+			return engine.RevDamp, true
+		case "REV_MIX":
+			return engine.RevMix, true
+		case "CHO_RATE":
+			return engine.ChoRate, true
+		case "CHO_DEPTH":
+			return engine.ChoDepth, true
+		case "CHO_MIX":
+			return engine.ChoMix, true
+		}
+		return 0, false
 	default:
 		return 0, false
 	}
@@ -196,6 +231,19 @@ func KnobParam(section, name string) (engine.ParamID, bool) {
 
 var bassOffset = map[string]engine.ParamID{"TUNE": engine.BTune, "CUTOFF": engine.BCutoff, "RESO": engine.BReso, "ENV": engine.BEnvMod, "DECAY": engine.BDecay, "ACCENT": engine.BAccent}
 var drumIndex = map[string]int{"BD": 0, "SD": 1, "CH": 2, "OH": 3, "CP": 4, "CY": 5}
+
+// mixerRevSend — 믹서 REV 센드 노브 이름 → RevSend(part)(§13.1 35..42). 드럼 채널은
+// drumIndex와 같은 보이스 순서다. 구성 시 1회 읽는 표라 핫 루프 무할당 규칙 밖이다.
+var mixerRevSend = map[string]engine.ParamID{
+	"REV_A":  engine.RevSend(engine.BassA),
+	"REV_B":  engine.RevSend(engine.BassB),
+	"REV_BD": engine.RevSend(engine.BD),
+	"REV_SD": engine.RevSend(engine.SD),
+	"REV_CH": engine.RevSend(engine.CH),
+	"REV_OH": engine.RevSend(engine.OH),
+	"REV_CP": engine.RevSend(engine.CP),
+	"REV_CY": engine.RevSend(engine.CY),
+}
 
 // PadPart — 패드 이름 → 엔진 Part(2..7). 알 수 없으면 false.
 func PadPart(name string) (engine.Part, bool) {

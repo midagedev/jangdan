@@ -23,6 +23,7 @@ const (
 	bkStep // arg = 스텝 0..15
 	bkPlay
 	bkRec
+	bkDeco // fx2 장식 버튼(§13.3 rev_on·cho_on·rev_pre·cho_st) — Cmd 없음·lit 없음
 )
 
 // editMode — 스텝 편집 모드. 둘 중 하나 또는 없음(전역 단일).
@@ -85,6 +86,17 @@ func buttonLabel(name string, kind btnKind, arg int) string {
 		return "PLAY"
 	case bkRec:
 		return "DROP"
+	case bkDeco:
+		switch name {
+		case "rev_on":
+			return "REV"
+		case "cho_on":
+			return "CHO"
+		case "rev_pre":
+			return "PRE"
+		case "cho_st":
+			return "ST"
+		}
 	}
 	switch name {
 	case "saw":
@@ -174,6 +186,8 @@ func (v *View) pressButton(ctx *core.Ctx, i int) {
 	case bkRec:
 		ctx.Bridge.Cmd(engine.Cmd{Kind: engine.Drop}, core.Human)
 		v.drop = true
+	case bkDeco:
+		// 장식(§13.3) — 눌림을 소비해 스크롤 제스처로 넘어가지 않게만 한다(송신 없음).
 	}
 }
 

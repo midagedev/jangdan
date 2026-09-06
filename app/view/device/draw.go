@@ -1,10 +1,11 @@
 // draw.go — 그리기 전부. Draw는 Cmd를 보내지 않는다.
 //
-// 프레임당 드로잉 예산: DrawImage ≤ 180회(패널 1 + 라벨 레이어 1 + 노브 29 + LED 36 +
+// 프레임당 드로잉 예산: DrawImage ≤ 199회(패널 1 + 라벨 레이어 1 + 노브 47 — P4-scroll
+// 믹서 12·fx2 6 추가 + LED 36 + 랙 blit 1 + 인디케이터 ≤ 1 — P4-scroll +
 // 표시창 3 + 오버레이 ≤ 14 + 코드 트랙 띠 채움 ≤ 2·글리프 ≈ 24 + VU 세그먼트 ≤ 44 + 패드
 // LED 점 ≤ 6 — P3-meters, 레벨 0이면 미터 0), vector 호출 1회(스코프
 // 폴리라인). 정적 라벨·스텝 버튼 면 16개·이름판 밴드 패치·코드 트랙 셀 외곽선 8개(1px×4변)
-// 는 첫 프레임에 720×1280 오프스크린 한 장(labelLayer)로 합성해 매 프레임 1회 blit한다
+// 는 첫 프레임에 레이아웃 크기(720×1800) 오프스크린 한 장(labelLayer)로 합성해 매 프레임 1회 blit한다
 // (프레임당 추가 비용 0). 옵션·버퍼는 전부 재사용.
 package device
 
@@ -37,24 +38,44 @@ const (
 	ledOff
 )
 
-// Draw — 패널 → 패드 lit/뮤트(라벨 아래 — 비전 FIX 2026-09-06) → 라벨 → LED → 노브 → 오버레이
-// → 코드 트랙 띠 → 표시창 → 라인 미터 → 스코프.
+// Draw — 랙(rack 오프스크린, 레이아웃 크기)에 본문 전체를 그린 뒤 scrollY만큼 올려 화면에
+// blit한다(§13.3 스크롤 랙). 화면 밖은 GPU가 클립한다 — 잘라내기용 SubImage는 쓰지 않는다
+// (할당이다). rack이 없는 newView(헤드리스 테스트) 경로는 예전처럼 화면에 직접 그린다.
+// 본문 순서: 패널 → 패드 lit/뮤트(라벨 아래 — 비전 FIX 2026-09-06) → 라벨 → LED → 노브 →
+// 오버레이 → 코드 트랙 띠 → 표시창 → 라인 미터 → 스코프. 인디케이터만 화면 좌표(랙 밖).
 func (v *View) Draw(screen *ebiten.Image, ctx *core.Ctx) {
+	dst := screen
+	if v.rack != nil {
+		dst = v.rack
+	}
+	v.drawRack(dst, ctx)
+	if dst == screen {
+		return
+	}
+	v.op.GeoM.Reset()
+	v.op.GeoM.Translate(0, -v.scrollY)
+	v.op.ColorScale.Reset()
+	screen.DrawImage(v.rack, &v.op)
+	v.drawScrollInd(screen, ctx)
+}
+
+// drawRack — Draw 본문. dst는 제품 경로 rack(720×1800) 또는 헤드리스 폴백 screen.
+func (v *View) drawRack(dst *ebiten.Image, ctx *core.Ctx) {
 	v.ensureLayers(ctx)
 	v.op.GeoM.Reset()
 	v.op.ColorScale.Reset()
-	screen.DrawImage(v.panel, &v.op)
-	v.drawPadLit(screen, ctx)
+	dst.DrawImage(v.panel, &v.op)
+	v.drawPadLit(dst, ctx)
 	v.op.GeoM.Reset()
 	v.op.ColorScale.Reset()
-	screen.DrawImage(v.labelLayer, &v.op)
-	v.drawLEDs(screen, ctx)
-	v.drawKnobs(screen, ctx)
-	v.drawOverlays(screen, ctx)
-	v.drawChordTrack(screen, ctx)
-	v.drawDisplays(screen, ctx)
-	v.drawMeters(screen, ctx)
-	v.drawScope(screen, ctx)
+	dst.DrawImage(v.labelLayer, &v.op)
+	v.drawLEDs(dst, ctx)
+	v.drawKnobs(dst, ctx)
+	v.drawOverlays(dst, ctx)
+	v.drawChordTrack(dst, ctx)
+	v.drawDisplays(dst, ctx)
+	v.drawMeters(dst, ctx)
+	v.drawScope(dst, ctx)
 }
 
 // ensureLayers — 첫 Draw에서 정적 라벨 레이어를 합성한다(폰트가 ctx로 오므로 여기서).
@@ -72,6 +93,8 @@ func (v *View) ensureLayers(ctx *core.Ctx) {
 			r := v.bassPlates[s]
 			v.fillRect(v.labelLayer, core.Rect{r[0], r[1], plateBandW, r[3]}, colPlateBand[s])
 		}
+	}
+	for s := 0; s < len(v.sectionPlates); s++ { // drums·fx·mixer·fx2(P4-scroll)
 		if v.hasSection[s] {
 			r := v.sectionPlates[s]
 			v.fillRect(v.labelLayer, core.Rect{r[0], r[1], plateBandW, r[3]}, colPlateBand[s+2])
@@ -103,7 +126,7 @@ func (v *View) ensureLayers(ctx *core.Ctx) {
 	for i := range v.knobs {
 		k := &v.knobs[i]
 		dy := float64(knobDyMain)
-		if k.sec == secDrums {
+		if k.sec == secDrums || k.sec == secMixer { // r25 노브는 행 간격이 좁아 라벨을 붙인다
 			dy = knobDyDrums
 		}
 		// 어두운 잉크: 라벨판이 밝은 크림이라 크림 라벨은 안 보였다(비전 처방).
@@ -135,8 +158,8 @@ func (v *View) ensureLayers(ctx *core.Ctx) {
 		f.Draw(v.labelLayer, "JANGDAN", cx+titleShiftX, cy, labelTitleScale, colInk, core.AlignCenter)
 	}
 	// 섹션 이름판: 왼쪽 정렬(+plateInset), 세로 중앙(y = cy − h/2). 폰트가 ASCII라 구분자는 asciiSep로 대체.
-	// 크림판 위 크림 라벨은 안 보였다 — 어두운 잉크(비전 처방).
-	for i, txt := range [2]string{"DRUMS", "FX" + asciiSep + "SEQ"} {
+	// 크림판 위 크림 라벨은 안 보였다 — 어두운 잉크(비전 처방). mixer·fx2 판은 P4-scroll 추가.
+	for i, txt := range [4]string{"DRUMS", "FX" + asciiSep + "SEQ", "MIXER", "FX 2"} {
 		if !v.hasSection[i] {
 			continue
 		}

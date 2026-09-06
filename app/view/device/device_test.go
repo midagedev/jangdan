@@ -32,6 +32,25 @@
 //	세그먼트 수 round(vu×N)·구 호스트 완전 소거 | TestMeterSegments/TestMeterDarkWhenLevelsZero: 풀스케일 결정
 //	                                        |   50건(12+12+20+6) 양성 대조, Levels 전부 0이면 결정 0, 탭 lit만으로 0
 //
+// — P4-scroll 계약↔단언(스크롤 랙 §13.3, 단언은 scroll_test.go) —
+//
+//	계약                                    | 단언
+//	----------------------------------------|----------------------------------------------
+//	빈 판 드래그 → scrollY(클램프 0..520)    | TestScrollDragClamp: −200px→200·과다→520·맨위→0,
+//	                                        |   손 뗀 뒤 무관성(v 0 유지)
+//	컨트롤 우선 — 노브 시작 드래그는 스크롤   | TestKnobDragNoScroll: CUTOFF −200px → SetParam만,
+//	                                        |   불변 scrollY 0
+//	관성 ×0.9/프레임·|v|<2px 정지·경계 정지  | TestScrollInertia: ≤60프레임 내 정지·이후 불변,
+//	                                        |   경계 밖 속도 → 520에서 즉시 정지
+//	포인터 y+scrollY 변환(단일 소유자)       | TestScrolledKnobHit: scrollY 400에서 화면 y=cy−400
+//	                                        |   탭 → REV_SIZE SetParam(레이아웃 좌표 판정 증명)
+//	첫 스크롤 포인터만(두 번째는 무동작)      | TestScrollSecondPointerIgnored: 동시 2포인터, 첫 것만 이동
+//	장식 버튼 = Cmd 0·스크롤로도 안 넘어감    | TestDecoButtons: bkDeco 4종 탭 Cmd 0개·라벨 REV/CHO/PRE/ST
+//	구 레이아웃(높이≤1280) 스크롤 비활성     | TestScrollDisabledShortLayout: scrollMax 0·빈 판 잡아도 pkNone
+//	휠 NaN·거대 값 방어·인디케이터 기하        | TestScrollClamp: NaN/±Inf/±거대 → 경계, scrollIndGeom
+//	                                        |   길이 1280²/1800·y 비례
+//	스크롤 상태 Update 무할당                 | TestScrollNoAlloc: scrollY 200·관성 감쇠 중·잡은 채 셋 다 0
+//
 // FAIL-first(구현 전 소스에서 실측, 2026-09-06):
 //
 //	go test ./app/view/device/ -run 'TestTransport|TestDisplayCache' -count=1
@@ -45,6 +64,13 @@
 // TestMeterSegments·TestMeterDarkWhenLevelsZero)은 신규 API(vuOf·vuStep·padLitAlpha·
 // vuSegsOn·meterDraws)와 동시 도입이라 구소스에서는 정의 없음 컴파일 실패가 FAIL-first다.
 // 헤드리스 경로의 소거 단언은 그리기 결정 카운터(meterDraws — room 뷰 draws 관례)로 한다.
+//
+// P4-scroll(2026-09-06) FAIL-first(구현 전 소스 — v3 레이아웃 반영 전):
+//
+//	go test ./app/view/device/ -count=1
+//	→ 전 테스트가 newView에서 "device: 노브 "mixer"/"REV_A"의 파라미터 매핑 없음"으로 사망
+//	  (layout.json은 이미 v3인데 KnobParam이 mixer/fx2를 모름). 매핑 추가 뒤에는
+//	  TestLayoutCounts "노브 47개(29 예상)"가 유일 적색 — 실측 갱신으로 닫았다.
 package device
 
 import (
@@ -257,20 +283,21 @@ func pressButton(h *harness, b *button) {
 
 func TestLayoutCounts(t *testing.T) {
 	h := newHarness(t)
-	if len(h.v.knobs) != 29 {
-		t.Fatalf("노브 %d개(29 예상)", len(h.v.knobs))
+	// P4-scroll(v3 레이아웃): 믹서 노브 12·fx2 6, fx2 장식 버튼 4, 믹서 활동 LED 8·fx2 장식 LED 4 추가.
+	if len(h.v.knobs) != 47 {
+		t.Fatalf("노브 %d개(47 예상)", len(h.v.knobs))
 	}
-	if len(h.v.buttons) != 38 {
-		t.Fatalf("버튼 %d개(38 예상)", len(h.v.buttons))
+	if len(h.v.buttons) != 42 {
+		t.Fatalf("버튼 %d개(42 예상)", len(h.v.buttons))
 	}
 	if len(h.v.pads) != 6 {
 		t.Fatalf("패드 %d개(6 예상)", len(h.v.pads))
 	}
-	if len(h.v.leds) != 36 {
-		t.Fatalf("LED %d개(36 예상)", len(h.v.leds))
+	if len(h.v.leds) != 48 {
+		t.Fatalf("LED %d개(48 예상)", len(h.v.leds))
 	}
-	if len(h.v.layout.Plates) != 5 {
-		t.Fatalf("이름판 %d개(5 예상)", len(h.v.layout.Plates))
+	if len(h.v.layout.Plates) != 7 {
+		t.Fatalf("이름판 %d개(7 예상)", len(h.v.layout.Plates))
 	}
 	// 29/29 노브가 KnobParam으로 매핑됨(newView는 실패 시 에러 — 여기까지 온 것이 증거).
 	for _, k := range h.v.knobs {
@@ -310,8 +337,12 @@ func sectionName(sec uint8) string {
 		return "basslineB"
 	case secDrums:
 		return "drums"
+	case secFx:
+		return "fx"
+	case secMixer:
+		return "mixer"
 	}
-	return "fx"
+	return "fx2"
 }
 
 // — 계약↔단언: 히트 —

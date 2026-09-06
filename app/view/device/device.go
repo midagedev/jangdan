@@ -66,12 +66,15 @@ var (
 	// (200,110,40)/나머지 (120,80,50))은 페인팅에 남아 있지 않고, 그대로 쓰면 R max/min 게이트(≤1.3)를
 	// 깬다(200/120=1.67) — 측정 중앙값 단일색으로 통일(보고서 참조).
 	colStepFace = color.NRGBA{0x92, 0x5E, 0x3B, 0xFF} // #925E3B = (146,94,59) — 16스텝 버튼 면 공통
-	// 이름판 좌측 밴드 패치색 — bassA·bassB·drums·fx 순. 판 내부 중앙값(테두리·잔글자 제외 영역).
-	colPlateBand = [4]color.NRGBA{
+	// 이름판 좌측 밴드 패치색 — bassA·bassB·drums·fx·mixer·fx2 순. 판 내부 중앙값(테두리·잔글자 제외 영역).
+	colPlateBand = [6]color.NRGBA{
 		{0xDB, 0xD3, 0xBF, 0xFF}, // (219,211,191)
 		{0xDB, 0xD3, 0xBF, 0xFF}, // (219,211,191)
 		{0xDA, 0xD0, 0xB6, 0xFF}, // (218,208,182)
 		{0xE8, 0xDC, 0xC1, 0xFF}, // (232,220,193)
+		// P4-scroll: 새 두 모듈은 §13.3 보라 (120,80,150) 계열 띠다 — panel-v3 실측 중앙값.
+		{0x84, 0x5B, 0x8B, 0xFF}, // mixer (132,91,139)
+		{0x84, 0x5B, 0x95, 0xFF}, // fx2 (132,91,149)
 	}
 	// 베이스라인 표시창 창색 — 창 청정부(하단 20px) 중앙값. 불투명 채움으로 페인팅 잔글자("68."류)를 차단.
 	colDispWin = [2]color.NRGBA{
@@ -98,12 +101,14 @@ const (
 	dispBottomScale   = 0.6
 )
 
-// 섹션 인덱스.
+// 섹션 인덱스. mixer·fx2는 P4-scroll 랙 확장(§13.3) — 스크롤 없이는 화면에 없다.
 const (
 	secBassA = 0
 	secBassB = 1
 	secDrums = 2
 	secFx    = 3
+	secMixer = 4
+	secFx2   = 5
 )
 
 const numBassSecBtns = 10 // 베이스라인 섹션 버튼(saw..patD) 수
@@ -121,6 +126,7 @@ const (
 	pkNone ptrKind = iota
 	pkKnob
 	pkPad
+	pkScroll // 빈 판을 잡은 드래그 — 랙 스크롤(§13.3, 상태는 scroll.go가 소유)
 )
 
 // ptrState — 포인터 ID별 캡처. 잡힌 노브는 이동 중 다른 컨트롤로 넘어가지 않는다.
@@ -129,6 +135,7 @@ type ptrState struct {
 	kind      ptrKind
 	idx       int
 	x0, y0    float64 // 누른 지점(탭 판정 이동 거리의 기준)
+	lastY     float64 // 직전 프레임 y(스크롤 프레임 델타·관성 속도의 기준)
 	t0        float64 // 누른 시각
 	grabVal   float32 // 노브 잡은 시점의 값
 	longFired bool    // 패드 길게 누르기 이미 발동
@@ -174,8 +181,8 @@ type View struct {
 	hasTitle      bool
 	bassPlates    [2]core.Rect
 	hasBassPlate  [2]bool
-	sectionPlates [2]core.Rect // drums·fx 이름판(라벨용)
-	hasSection    [2]bool
+	sectionPlates [4]core.Rect // drums·fx·mixer·fx2 이름판(라벨용)
+	hasSection    [4]bool
 
 	dispRects [2]core.Rect
 	hasDisp   [2]bool
@@ -192,11 +199,23 @@ type View struct {
 	selPart engine.Part // 16스텝 편집 대상(기본 BassA)
 	mode    editMode
 
-	ptrs   [8]ptrState
-	nptrs  int
-	disp   [2]bassDisp
-	bottom bottomDisp
-	meters meters // 라인 VU 밸리스틱(P3-meters) — 파트 8 + 마스터
+	ptrs  [8]ptrState
+	nptrs int
+
+	// 스크롤 랙(§13.3 — 상태·입력·그리기 전부 scroll.go가 소유한다). rack은 New에서
+	// 1회 만드는 레이아웃 크기(720×1800) 오프스크린 — Draw 본문을 전부 여기에 그린 뒤
+	// scrollY만큼 올려 화면에 blit한다. sptrs는 포인터의 화면 좌표 사본(ctx.Pointers는
+	// 재사용 슬라이스라 수정 금지) — 제스처는 화면 좌표계로 재고, 레이아웃 좌표 변환
+	// (y+scrollY)의 단일 소유자는 press()의 히트 판정이다(scroll.go 헤더 참조).
+	scrollY         float64
+	scrollV         float64
+	scrollShowUntil float64
+	scrollMax       float64
+	rack            *ebiten.Image
+	sptrs           [8]core.Pointer
+	disp            [2]bassDisp
+	bottom          bottomDisp
+	meters          meters // 라인 VU 밸리스틱(P3-meters) — 파트 8 + 마스터
 
 	// 재구성 카운터 — 표시창 캐시 계약의 테스트 근거.
 	rebuilds int
@@ -251,6 +270,8 @@ func New(ctx *core.Ctx) (*View, error) {
 		return nil, fmt.Errorf("device: 패널 디코드: %w", err)
 	}
 	v.panel = ebiten.NewImageFromImage(img)
+	// 랙 오프스크린(레이아웃 크기 = 720×1800) — 스크롤 blit의 원본 한 장. 여기서만 만든다.
+	v.rack = ebiten.NewImage(int(l.Size[0]), int(l.Size[1]))
 
 	type cls struct {
 		r   float64
@@ -308,7 +329,7 @@ func newView(l *core.DeviceLayout) (*View, error) {
 		v.fxLEDs[i] = -1
 	}
 
-	secOf := map[string]uint8{"basslineA": secBassA, "basslineB": secBassB, "drums": secDrums, "fx": secFx}
+	secOf := map[string]uint8{"basslineA": secBassA, "basslineB": secBassB, "drums": secDrums, "fx": secFx, "mixer": secMixer, "fx2": secFx2}
 	for _, k := range l.Knobs {
 		id, ok := core.KnobParam(k.Section, k.Name)
 		if !ok {
@@ -345,6 +366,8 @@ func newView(l *core.DeviceLayout) (*View, error) {
 			bt.kind = bkPlay
 		case "rec":
 			bt.kind = bkRec
+		case "rev_on", "cho_on", "rev_pre", "cho_st": // §13.3 fx2 장식 버튼 — 송신·lit 없음(bkDeco)
+			bt.kind = bkDeco
 		default:
 			if n, err := strconv.Atoi(strings.TrimPrefix(b.Name, "step")); err == nil && n >= 1 && n <= engine.Steps {
 				bt.kind, bt.arg = bkStep, n-1
@@ -383,6 +406,10 @@ func newView(l *core.DeviceLayout) (*View, error) {
 			v.sectionPlates[0], v.hasSection[0] = pl.Rect, true
 		case "fx":
 			v.sectionPlates[1], v.hasSection[1] = pl.Rect, true
+		case "mixer":
+			v.sectionPlates[2], v.hasSection[2] = pl.Rect, true
+		case "fx2":
+			v.sectionPlates[3], v.hasSection[3] = pl.Rect, true
 		}
 	}
 	for _, d := range l.Displays {
@@ -395,6 +422,11 @@ func newView(l *core.DeviceLayout) (*View, error) {
 	}
 	v.scopeRect = l.Scope.Rect
 	v.botRect = l.Display.Rect
+	// 스크롤 상한 = 레이아웃 높이 − 화면 높이(§13.3). 구 레이아웃(≤1280)이면 0 —
+	// 스크롤 비활성·인디케이터 없음(3클래스 방어 1).
+	if m := l.Size[1] - core.LogicalH; m > 0 {
+		v.scrollMax = m
+	}
 	v.initChord()
 	if err := v.pairLEDs(); err != nil {
 		return nil, err
@@ -402,12 +434,15 @@ func newView(l *core.DeviceLayout) (*View, error) {
 	return v, nil
 }
 
-// pairLEDs — LED를 cy 밴드(3개: 베이스라인 A·B, fx 스텝)로 묶고 같은 밴드 안에서
-// x 순서로 섹션 버튼(왼→오)·스텝 버튼(1..16)과 짝짓는다. 좌표 소유권은 JSON에 있다.
+// pairLEDs — LED를 cy 밴드로 묶어 섹션 버튼(베이스라인 A·B, 왼→오)·스텝 버튼(1..16)과
+// 짝짓는다. 밴드가 3개뿐이던 구현을 P4-scroll의 5밴드(믹서 활동 8·fx2 장식 4 추가)로
+// 일반화한다: 각 버튼 행은 "아직 안 쓴 밴드 중 개수가 같고 행 y에 가장 가까운" 밴드와
+// 짝짓는다. 짝이 남는 밴드는 장식 — 어떤 상태와도 묶지 않는다(패널이 어둡게 칠해 둔 자리).
 func (v *View) pairLEDs() error {
 	type band struct {
-		cy  float64
-		ids []int
+		cy   float64
+		ids  []int
+		used bool
 	}
 	var bands []band
 	for i, led := range v.leds {
@@ -424,9 +459,6 @@ func (v *View) pairLEDs() error {
 		}
 	}
 	sort.Slice(bands, func(i, j int) bool { return bands[i].cy < bands[j].cy })
-	if len(bands) != 3 {
-		return fmt.Errorf("device: LED 밴드 %d개(3개 예상)", len(bands))
-	}
 	for bi := range bands {
 		ids := bands[bi].ids
 		sort.Slice(ids, func(a, b int) bool {
@@ -434,32 +466,59 @@ func (v *View) pairLEDs() error {
 		})
 		bands[bi].ids = ids
 	}
+	// nearest — 아직 안 쓴 밴드 중 개수 n과 같고 y에 가장 가까운 것(없으면 -1).
+	nearest := func(y float64, n int) int {
+		best, bestD := -1, 0.0
+		for bi := range bands {
+			if bands[bi].used || len(bands[bi].ids) != n {
+				continue
+			}
+			if d := math.Abs(bands[bi].cy - y); best < 0 || d < bestD {
+				best, bestD = bi, d
+			}
+		}
+		return best
+	}
 	for s := 0; s < 2; s++ {
 		var btns []int
+		cy := 0.0
 		for i := range v.buttons {
 			if v.buttons[i].sec == uint8(s) {
 				btns = append(btns, i)
+				cy += v.buttons[i].rect[1] + v.buttons[i].rect[3]/2
 			}
+		}
+		if len(btns) == 0 || len(btns) > numBassSecBtns {
+			return fmt.Errorf("device: 섹션 %d 버튼 %d개(짝짓기 불가)", s, len(btns))
 		}
 		sort.Slice(btns, func(a, b int) bool {
 			return v.buttons[btns[a]].rect[0] < v.buttons[btns[b]].rect[0]
 		})
-		if len(btns) != len(bands[s].ids) {
-			return fmt.Errorf("device: 섹션 %d 버튼 %d개 vs LED %d개", s, len(btns), len(bands[s].ids))
+		bi := nearest(cy/float64(len(btns)), len(btns))
+		if bi < 0 {
+			return fmt.Errorf("device: 섹션 %d 버튼 %d개와 짝인 LED 밴드 없음", s, len(btns))
 		}
-		copy(v.secLEDs[s][:], bands[s].ids)
+		bands[bi].used = true
+		copy(v.secLEDs[s][:], bands[bi].ids)
 	}
 	var steps []int
+	cy := 0.0
 	for i := range v.buttons {
 		if v.buttons[i].kind == bkStep {
 			steps = append(steps, i)
+			cy += v.buttons[i].rect[1] + v.buttons[i].rect[3]/2
 		}
 	}
-	sort.Slice(steps, func(a, b int) bool { return v.buttons[steps[a]].arg < v.buttons[steps[b]].arg })
-	if len(steps) != len(bands[2].ids) {
-		return fmt.Errorf("device: 스텝 버튼 %d개 vs LED %d개", len(steps), len(bands[2].ids))
+	if len(steps) == 0 {
+		return nil
 	}
-	copy(v.fxLEDs[:], bands[2].ids)
+	sort.Slice(steps, func(a, b int) bool { return v.buttons[steps[a]].arg < v.buttons[steps[b]].arg })
+	bi := nearest(cy/float64(len(steps)), len(steps))
+	if bi < 0 {
+		return fmt.Errorf("device: 스텝 버튼 %d개와 짝인 LED 밴드 없음", len(steps))
+	}
+	bands[bi].used = true
+	copy(v.fxLEDs[:], bands[bi].ids)
 	return nil
 }
 
@@ -468,8 +527,23 @@ func (v *View) Update(ctx *core.Ctx) {
 	v.back, v.drop, v.grabOK = false, false, false
 	v.meterDraws = 0
 	v.runSweeps(ctx)
-	for i := range ctx.Pointers {
-		p := &ctx.Pointers[i]
+	v.wheelScroll(ctx) // 휠·트랙패드(§13.3) — 포인터와 무관하게 매 프레임(main.go 수정 없음)
+	v.stepScroll(ctx)  // 관성 감쇠(§13.3) — 스크롤 포인터를 잡은 중에는 쉰다
+	// 포인터 사본 — 화면 좌표 그대로(ctx.Pointers는 재사용 슬라이스라 절대 수정하지 않는다).
+	// 제스처(노브 드래그·스크롤 델타)는 화면 좌표계로 잰다: 스크롤이 랙을 옮기는 중에도
+	// 손가락의 화면 이동만 재야 프레임 되먹임이 없다. 레이아웃 좌표가 필요한 곳은 히트
+	// 판정뿐이고 +scrollY 변환의 단일 소유자는 press()다(scroll.go 헤더 참조).
+	// 동시 8개 초과 포인터는 초과분 무시(방어 3 — 사본 배열 상한).
+	n := len(ctx.Pointers)
+	if n > len(v.sptrs) {
+		n = len(v.sptrs)
+	}
+	ptrs := v.sptrs[:n]
+	for i := 0; i < n; i++ {
+		ptrs[i] = ctx.Pointers[i]
+	}
+	for i := range ptrs {
+		p := &ptrs[i]
 		si := v.findPtr(p.ID)
 		switch {
 		case p.JustPressed:
@@ -550,46 +624,58 @@ func (v *View) dropPtr(i int) {
 	v.freePtr(i)
 }
 
-// press — 포인터 누름. 히트 우선순위: 노브 > 패드 > 버튼 > 코드 트랙 띠 > B 표시창 > 이름판.
-// 코드 선택기가 열려 있으면 띠 밖 눌림으로 닫는다(송신 없음) — 눌림의 원래 동작은 계속된다.
+// press — 포인터 누름. 히트 우선순위(§13.3): 노브 > 패드 > 버튼 > 코드 트랙 띠 > B 표시창 >
+// 이름판 > 베이스 이름판(섹션 선택) > 빈 판 = 스크롤 제스처. 코드 선택기가 열려 있으면 띠 밖
+// 눌림으로 닫는다(송신 없음) — 눌림의 원래 동작은 계속된다. 히트 판정은 레이아웃 좌표로:
+// 화면 y + scrollY 변환의 단일 소유자가 이 함수 첫머리다(제스처는 화면 좌표 — scroll.go 헤더).
 func (v *View) press(ctx *core.Ctx, p *core.Pointer, si int) {
 	st := &v.ptrs[si]
 	st.x0, st.y0, st.t0, st.longFired = p.X, p.Y, ctx.Now, false
-	if v.chord.open && v.chordCellAt(p.X, p.Y) < 0 {
+	y := p.Y + v.scrollY
+	if v.chord.open && v.chordCellAt(p.X, y) < 0 {
 		v.chord.open = false
 	}
-	if k := v.hitKnob(p.X, p.Y); k >= 0 {
+	if k := v.hitKnob(p.X, y); k >= 0 {
 		st.kind, st.idx = pkKnob, k
 		st.grabVal = v.knobValue(ctx, &v.knobs[k])
 		v.grabKnob(ctx, k)
 		return
 	}
-	if pd := v.hitPad(p.X, p.Y); pd >= 0 {
+	if pd := v.hitPad(p.X, y); pd >= 0 {
 		st.kind, st.idx = pkPad, pd
 		return
 	}
 	st.kind, st.idx = pkNone, -1
-	if b := v.hitButton(p.X, p.Y); b >= 0 {
+	if b := v.hitButton(p.X, y); b >= 0 {
 		v.pressButton(ctx, b)
 		return
 	}
-	if c := v.chordCellAt(p.X, p.Y); c >= 0 {
+	if c := v.chordCellAt(p.X, y); c >= 0 {
 		v.tapChordBand(ctx, c)
 		return
 	}
-	if v.hasDisp[1] && rectHit(v.dispRects[1], p.X, p.Y) {
+	if v.hasDisp[1] && rectHit(v.dispRects[1], p.X, y) {
 		v.tapBassModeDisplay(ctx)
 		return
 	}
-	if v.hasTitle && rectHit(v.titlePlate, p.X, p.Y) {
+	if v.hasTitle && rectHit(v.titlePlate, p.X, y) {
 		v.back = true
 		return
 	}
 	for s := 0; s < 2; s++ {
-		if v.hasBassPlate[s] && rectHit(v.bassPlates[s], p.X, p.Y) {
+		if v.hasBassPlate[s] && rectHit(v.bassPlates[s], p.X, y) {
 			v.selPart = engine.Part(s)
 			return
 		}
+	}
+	// 어느 컨트롤에도 맞지 않은 눌림 = 빈 판 잡기 → 스크롤(§13.3 우선순위의 맨 아래).
+	// lastY는 화면 y — 스크롤 델타는 화면 좌표계로 잰다. 스크롤이 없는 구 레이아웃
+	// (scrollMax 0)은 잡지 않는다. 이미 스크롤을 잡은 포인터가 있으면 첫 것만 산다
+	// (두 손가락 동시 스크롤 방지 — 두 번째는 pkNone 그대로).
+	if v.scrollMax > 0 && !v.scrollHeld() {
+		st.kind, st.lastY = pkScroll, p.Y
+		v.scrollV = 0 // 새 잡기는 직전 관성을 끊는다
+		v.scrollShowUntil = ctx.Now + scrollIndDur
 	}
 }
 
@@ -609,6 +695,12 @@ func (v *View) movePtr(ctx *core.Ctx, p *core.Pointer, si int) {
 			st.longFired = true
 			v.holdPad(ctx, st.idx)
 		}
+	case pkScroll:
+		dy := p.Y - st.lastY
+		st.lastY = p.Y
+		v.scrollY = v.clampScroll(v.scrollY - dy)
+		v.scrollV = dy // 놓는 순간의 최근 프레임 델타가 관성 초기 속도(§13.3)
+		v.scrollShowUntil = ctx.Now + scrollIndDur
 	}
 }
 

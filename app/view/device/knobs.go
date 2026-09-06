@@ -15,8 +15,8 @@ import (
 // knob — 레이아웃 노브 하나의 정적 기하 + 실행 상태.
 type knob struct {
 	name      string
-	label     string // 패널에 그리는 표시명(드럼은 내부명과 다르다 — knobLabel)
-	sec       uint8  // secBassA..secFx
+	label     string // 패널에 그리는 표시명(드럼·믹서·fx2는 내부명과 다르다 — knobLabel)
+	sec       uint8  // secBassA..secFx2
 	cx, cy, r float64
 	id        engine.ParamID
 
@@ -37,13 +37,18 @@ type knob struct {
 
 // knobLabel — 노브 위 라벨 표시명. 드럼 노브의 내부 파라미터명(BD_LEVEL)은 보이스명까지
 // 품고 있어 그대로 올리면 내부명이 노출된다 — 표시명(LEVEL)만 쓰고 보이스명은 패드 라벨이
-// 담당한다(비전 판정 2026-09-05 처방). 나머지 섹션은 레이아웃 이름 그대로.
+// 담당한다(비전 판정 2026-09-05 처방). 믹서·fx2(§13.3)는 버스 접두(REV_·CHO_)를 떼고
+// 나머지 밑줄은 공백(REV_BD→"BD", LEVEL_A→"LEVEL A", CHO_RATE→"RATE").
+// 나머지 섹션은 레이아웃 이름 그대로. 구성 시 1회라 무할당 규칙 밖이다.
 func knobLabel(sec uint8, name string) string {
-	if sec != secDrums {
-		return name
-	}
-	if i := strings.IndexByte(name, '_'); i >= 0 {
-		return name[i+1:]
+	switch sec {
+	case secDrums:
+		if i := strings.IndexByte(name, '_'); i >= 0 {
+			return name[i+1:]
+		}
+	case secMixer, secFx2:
+		n := strings.TrimPrefix(strings.TrimPrefix(name, "REV_"), "CHO_")
+		return strings.ReplaceAll(n, "_", " ")
 	}
 	return name
 }

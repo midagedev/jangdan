@@ -1,7 +1,7 @@
 {
  "size": [
   720,
-  1280
+  1800
  ],
  "knobs": [
   {
@@ -206,6 +206,132 @@
    "cx": 619,
    "cy": 1010,
    "r": 42
+  },
+  {
+   "name": "REV_A",
+   "section": "mixer",
+   "cx": 103,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "REV_B",
+   "section": "mixer",
+   "cx": 178,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "REV_BD",
+   "section": "mixer",
+   "cx": 253,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "REV_SD",
+   "section": "mixer",
+   "cx": 328,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "REV_CH",
+   "section": "mixer",
+   "cx": 403,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "REV_OH",
+   "section": "mixer",
+   "cx": 478,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "REV_CP",
+   "section": "mixer",
+   "cx": 553,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "REV_CY",
+   "section": "mixer",
+   "cx": 628,
+   "cy": 1362,
+   "r": 25
+  },
+  {
+   "name": "LEVEL_A",
+   "section": "mixer",
+   "cx": 103,
+   "cy": 1448,
+   "r": 25
+  },
+  {
+   "name": "LEVEL_B",
+   "section": "mixer",
+   "cx": 208,
+   "cy": 1448,
+   "r": 25
+  },
+  {
+   "name": "CHO_A",
+   "section": "mixer",
+   "cx": 313,
+   "cy": 1448,
+   "r": 25
+  },
+  {
+   "name": "CHO_B",
+   "section": "mixer",
+   "cx": 418,
+   "cy": 1448,
+   "r": 25
+  },
+  {
+   "name": "REV_SIZE",
+   "section": "fx2",
+   "cx": 112,
+   "cy": 1638,
+   "r": 32
+  },
+  {
+   "name": "REV_DAMP",
+   "section": "fx2",
+   "cx": 218,
+   "cy": 1638,
+   "r": 32
+  },
+  {
+   "name": "REV_MIX",
+   "section": "fx2",
+   "cx": 322,
+   "cy": 1638,
+   "r": 32
+  },
+  {
+   "name": "CHO_RATE",
+   "section": "fx2",
+   "cx": 428,
+   "cy": 1638,
+   "r": 32
+  },
+  {
+   "name": "CHO_DEPTH",
+   "section": "fx2",
+   "cx": 532,
+   "cy": 1638,
+   "r": 32
+  },
+  {
+   "name": "CHO_MIX",
+   "section": "fx2",
+   "cx": 638,
+   "cy": 1638,
+   "r": 32
   }
  ],
  "buttons": [
@@ -588,6 +714,46 @@
     47,
     48
    ]
+  },
+  {
+   "name": "rev_on",
+   "section": "fx2",
+   "rect": [
+    84,
+    1724,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "cho_on",
+   "section": "fx2",
+   "rect": [
+    133,
+    1724,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "rev_pre",
+   "section": "fx2",
+   "rect": [
+    182,
+    1724,
+    34,
+    34
+   ]
+  },
+  {
+   "name": "cho_st",
+   "section": "fx2",
+   "rect": [
+    231,
+    1724,
+    34,
+    34
+   ]
   }
  ],
  "pads": [
@@ -691,6 +857,24 @@
     128,
     23
    ]
+  },
+  {
+   "for": "mixer",
+   "rect": [
+    36,
+    1295,
+    128,
+    23
+   ]
+  },
+  {
+   "for": "fx2",
+   "rect": [
+    36,
+    1543,
+    128,
+    23
+   ]
   }
  ],
  "panels": [
@@ -728,6 +912,24 @@
     933,
     675,
     324
+   ]
+  },
+  {
+   "name": "mixer",
+   "rect": [
+    22,
+    1286,
+    675,
+    230
+   ]
+  },
+  {
+   "name": "fx2",
+   "rect": [
+    22,
+    1533,
+    675,
+    240
    ]
   }
  ],
@@ -911,6 +1113,66 @@
    "cx": 667,
    "cy": 1157,
    "r": 6
+  },
+  {
+   "cx": 562,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 579,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 596,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 613,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 630,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 647,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 664,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 681,
+   "cy": 1448,
+   "r": 6
+  },
+  {
+   "cx": 101,
+   "cy": 1766,
+   "r": 6
+  },
+  {
+   "cx": 150,
+   "cy": 1766,
+   "r": 6
+  },
+  {
+   "cx": 199,
+   "cy": 1766,
+   "r": 6
+  },
+  {
+   "cx": 248,
+   "cy": 1766,
+   "r": 6
   }
  ],
  "displays": [
@@ -988,6 +1250,14 @@
    0.7,
    0.45
   ],
-  "note": "labels are drawn by the app font; CB renamed CY"
+  "note": "labels are drawn by the app font; CB renamed CY",
+  "v3": {
+   "wire": "layout-wire-v3.json",
+   "seed": 1234,
+   "modules": [
+    "mixer",
+    "fx2"
+   ]
+  }
  }
 }
