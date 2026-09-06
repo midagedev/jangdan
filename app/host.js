@@ -61,6 +61,13 @@
     replayDone: 0,
     telemetryQueued: 0,
     telemetrySent: 0,
+    // 오디오 해제 진단(2026-09-06 iPhone 실측: 탭·노브는 기록됐는데 audioStarted=false) —
+    // 어느 제스처에서 resume가 통했는지 다음 리포트가 말해 주도록 상태를 남긴다.
+    audioState: null,      // AudioContext.state 마지막 관측값('none' = 컨텍스트 없음)
+    resumeCalls: 0,        // resume() 호출 수(제스처마다 1)
+    gestures: 0,           // 해제 후보 제스처 이벤트 수(pointerdown/up·touchend·click·keydown)
+    audioRunningMs: null,  // 첫 제스처 → state 'running' 소요
+    audioStuck: 0,         // 첫 제스처 2초 뒤에도 running이 아니었다(1회 기록)
     // 공유 세션(§12.6) — 저장·열기 상태. sharedEntries는 Go가 디코드 수를 채운다.
     sharedId: null,
     sharedBytes: null,   // 열기: 받은 log 페이로드 문자 수
@@ -235,6 +242,8 @@
       firstSoundMs: s.firstSoundMs, ticks: s.ticks, cmdsSent: s.cmdsSent, logLen: s.logLen,
       keyframes: s.keyframes, replayDone: s.replayDone, frameMsP95: s.frameMsP95,
       hiddenFrames: s.hiddenFrames, audioStarted: s.audioStarted, seedWord: s.seedWord,
+      audioState: s.audioState, resumeCalls: s.resumeCalls, gestures: s.gestures,
+      audioRunningMs: s.audioRunningMs, audioStuck: s.audioStuck,
     };
   }
   function buildTelemetryPayload(nEvents) {
@@ -245,7 +254,7 @@
       ua: navigator.userAgent,
       platform: navigator.platform || null,
       dpr: window.devicePixelRatio,
-      startedAt: new Date(tPageStart).toISOString(),
+      startedAt: new Date(performance.timeOrigin + tPageStart).toISOString(), // 구: 1970 — 에포크 없이 now()를 넣었다
       events: evs,
       stats: statsSummary(),
     };
@@ -295,10 +304,12 @@
   // 환경이면 start()가 종전처럼 제스처 뒤에 만든다.
   let audio = null, node = null, analyser = null;
   let preModule = null; // addModule 선행 Promise(성공 시 audio도 선행 생성됨)
+  let preCtx = null;    // 선행 생성 컨텍스트 — 제스처 핸들러가 start() 전에도 동기 resume()을 걸 수 있게
   try {
-    const pre = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+    preCtx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+    const pre = preCtx;
     preModule = pre.audioWorklet.addModule('processor.js').then(() => pre, (e) => { console.warn('jd host: addModule 선행 실패, 제스처 뒤 재시도:', e); return null; });
-  } catch (e) { preModule = null; }
+  } catch (e) { preModule = null; preCtx = null; }
   let startingAudio = false;
   let tAudioStart = 0;
   const pendingCmds = []; // 시작 전 cmd — start 직후 at=0으로 발송(로그 블록 0)
@@ -365,20 +376,49 @@
     }
   }
 
+  // resumeAudio — 컨텍스트가 running이 아니면 resume()을 건다. **기다리지 않는다**: iOS Safari는
+  // 인정하지 않는 제스처(pointerdown/touchstart)에서 부른 resume()의 Promise를 영원히 미결로 두므로,
+  // 이걸 await하던 구 start()는 첫 탭에서 굳어 이후 모든 탭을 무시했다(2026-09-06 iPhone 실측:
+  // first_tap·first_knob 기록, audioStarted=false, ticks=0). 해제는 statechange가 알린다.
+  function resumeAudio(why) {
+    const a = audio || preCtx;
+    if (!a || a.state === 'running') return;
+    stats.resumeCalls++;
+    a.resume().catch(() => {});
+    if (!a.__jdStateHook) {
+      a.__jdStateHook = true;
+      a.addEventListener('statechange', () => {
+        stats.audioState = a.state;
+        if (a.state === 'running' && stats.audioRunningMs === null && tAudioStart > 0) {
+          stats.audioRunningMs = performance.now() - tAudioStart;
+          telemetry('audio_running', Math.round(stats.audioRunningMs));
+        }
+      });
+    }
+  }
   async function start() {
-    if (audio || startingAudio) return; // 중복 호출 무해
+    if (audio || startingAudio) { resumeAudio('again'); return; } // 중복 호출 무해 — 제스처마다 resume 재시도
     startingAudio = true;
     try {
       tAudioStart = performance.now();
       const pre = preModule ? await preModule : null;
       if (pre) {
         audio = pre;
-        await audio.resume();
+        resumeAudio('start');
       } else {
         audio = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
-        await audio.resume();
-        await audio.audioWorklet.addModule('processor.js');
+        resumeAudio('start');
+        await audio.audioWorklet.addModule('processor.js'); // suspended 상태에서도 된다
       }
+      // 첫 제스처 2초 뒤에도 running이 아니면 기록한다(다음 리포트의 audioState와 함께 원인 축소용).
+      setTimeout(() => {
+        if (!audio || audio.state !== 'running') {
+          stats.audioStuck = 1;
+          stats.audioState = audio ? audio.state : 'none';
+          telemetry('audio_stuck', stats.resumeCalls);
+          console.warn('jd host: 오디오 컨텍스트가 제스처 뒤에도 running이 아니다:', stats.audioState);
+        }
+      }, 2000);
       const module = await modulePromise;
       const nodeSeed = seedNumber();
       node = new AudioWorkletNode(audio, 'jd', {
@@ -576,14 +616,21 @@
   }
 
   // ==== 첫 탭 → 오디오 시작(제스처). Go 쪽 Start()와 같이 들어와도 무해. ====
+  // iOS Safari는 touchstart/pointerdown을 오디오 해제 제스처로 인정하지 않는다(touchend·click은
+  // 인정). 후보 이벤트 전부에서 동기 resume()을 걸고, start()는 첫 이벤트에서 1회 진행한다.
   let firstTapAt = null;
-  window.addEventListener('pointerdown', () => {
+  const onGesture = () => {
+    stats.gestures++;
     if (firstTapAt === null) {
       firstTapAt = performance.now();
       telemetry('first_tap', Math.round(firstTapAt - tPageStart));
     }
+    resumeAudio('gesture'); // 핸들러 안에서 동기 호출 — 제스처 활성 창을 놓치지 않는다
     start();
-  }, { capture: true, passive: true });
+  };
+  for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) {
+    window.addEventListener(ev, onGesture, { capture: true, passive: true });
+  }
 
   const reducedMotionQ = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
   const wallOut = [0, 0, 0];
@@ -825,6 +872,7 @@
       fpsEst: winSumMs > 0 ? winCount / (winSumMs / 1000) : null,
       contextSampleRate: audio ? audio.sampleRate : null,
       audioStarted: !!node,
+      audioState: audio ? audio.state : (preCtx ? preCtx.state : 'none'),
       seedWord: seedbox ? seedbox.value : null,
       replaying: isReplaying,
       // 비소모 라이브 값(측정 폴링용 — tick()은 flags를 소비하므로 남겨 둔다).
