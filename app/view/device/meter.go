@@ -25,21 +25,25 @@ const (
 	vuSegPad     = 2.0      // 띠 좌우 여백(px)
 	vuSegGap     = 1.0      // 세그먼트 간 간격(px)
 	vuBandLift   = 2.0      // 띠를 창 바닥에서 올리는 여백(px)
-	vuBandH      = 4        // 베이스 표시창 띠 높이(px)
+	vuBandH      = 5        // 베이스 표시창 띠 높이(px) — 비전 FIX 2026-09-06: 4→5(꺼진 트랙과 함께 미터로 읽히게)
 	vuBandHBot   = 3        // 하단 표시창 띠 높이(px)
 	vuSegsBass   = 12       // 베이스 표시창 세그먼트 수
 	vuSegsBottom = 20       // 하단 표시창(마스터) 세그먼트 수
 	vuTextDy     = 2.0      // 베이스 표시창 텍스트 리프트(px, 중앙에서 위로 — 띠 4px 회피)
 	vuTextDyBot  = 1.0      // 하단 표시창 텍스트 리프트(띠가 3px라 2px 올리면 과하다 — slot별 오프셋)
 	padLEDInset  = 6.0      // 패드 LED 점 들여쓰기(좌상단 +6,+6, px)
-	padLEDR      = 4.0      // 패드 LED 점 반지름(px)
+	padLEDR      = 6.0      // 패드 LED 점 반지름(px) — 비전 FIX 2026-09-06: 4→6(약해진 워시 보상)
 	padLitMinA   = 0.12     // 패드 레벨 lit 기본 알파: α = 0.12 + 0.5·vu
 	padLitVuA    = 0.5
-	padLitMaxA   = 0.62 // 탭 lit과의 합성 상한
+	padLitMaxA   = 0.20 // 탭 lit과의 합성 상한 — 비전 FIX 2026-09-06: 0.62→0.20(점등 패드 라벨 대비 1.93:1 → 판정자 시뮬 3.13:1; 0.22 실측 2.78:1)
+	vuOffA       = 41   // 꺼진 세그먼트 알파(0.16×255) — 비전 FIX 2026-09-06: 트랙이 없으면 켜진 1~2칸이 얼룩으로 읽힌다
 )
 
 // colVUSeg — VU 세그먼트 기본색 = colLCD α0.9(RGB는 계약색 그대로 — 새 색이 아니다).
 var colVUSeg = color.NRGBA{colLCD.R, colLCD.G, colLCD.B, 230}
+
+// colVUOff — 꺼진 세그먼트(트랙) 색 = colLCD α0.16. 창 배경(68,68,72) 위 ≈ (79,92,82).
+var colVUOff = color.NRGBA{colLCD.R, colLCD.G, colLCD.B, vuOffA}
 
 // meters — 라인 VU 밸리스틱 상태. 값 타입 배열 — 할당 0.
 type meters struct {
@@ -100,7 +104,7 @@ func vuSegsOn(vu float32, segs int) int {
 	return n
 }
 
-// padLitAlpha — 패드 lit 합성 알파: max(탭 lit, 0.12+0.5·vu) 상한 0.62. 레벨 0이면 탭 lit만
+// padLitAlpha — 패드 lit 합성 알파: max(탭 lit, 0.12+0.5·vu) 상한 padLitMaxA. 레벨 0이면 탭 lit만
 // (레벨 꺼짐이 탭 피드백을 지우지 않는다 — 소거 계약은 그림 픽셀 쪽에만). 순수 함수(단언 대상).
 func padLitAlpha(tapA, vu float32) float32 {
 	a := tapA
@@ -128,20 +132,25 @@ func (v *View) drawMeters(screen *ebiten.Image, ctx *core.Ctx) {
 }
 
 // drawVuBand — 창 r 하단의 VU 세그먼트 띠. 세그먼트 폭 = (창 폭 − 2×여백 − (segs−1)×간격)/segs,
-// 높이 bandH, 창 바닥에서 vuBandLift 위. 세그먼트 0..hot−1은 colVUSeg(colLCD α0.9), hot..은 colLED.
+// 높이 bandH, 창 바닥에서 vuBandLift 위. 꺼진 세그먼트는 항상 colVUOff 트랙으로 그린다(비전 FIX
+// 2026-09-06). 켜진 세그먼트 0..hot−1은 colVUSeg(colLCD α0.9), hot..은 colLED.
+// meterDraws는 켜진 세그먼트만 센다(트랙은 레벨과 무관한 상시 요소 — 소거 계약 밖).
 func (v *View) drawVuBand(screen *ebiten.Image, r core.Rect, vu float32, segs, bandH int) {
-	lit := vuSegsOn(vu, segs)
-	if lit == 0 || r[2] <= 0 {
+	if r[2] <= 0 {
 		return
 	}
+	lit := vuSegsOn(vu, segs)
 	v.meterDraws += lit // 그리기 결정 카운터 — 헤드리스 테스트 근거(room 뷰 draws 관례)
 	hot := int(math.Round(float64(segs) * vuHot))
 	segW := (r[2] - 2*vuSegPad - vuSegGap*float64(segs-1)) / float64(segs)
 	y := r[1] + r[3] - vuBandLift - float64(bandH)
-	for i := 0; i < lit; i++ {
-		c := colVUSeg
-		if i >= hot {
-			c = colLEDOn
+	for i := 0; i < segs; i++ {
+		c := colVUOff
+		if i < lit {
+			c = colVUSeg
+			if i >= hot {
+				c = colLEDOn
+			}
 		}
 		v.fillRectA(screen, core.Rect{r[0] + vuSegPad + float64(i)*(segW+vuSegGap), y, segW, float64(bandH)}, c)
 	}

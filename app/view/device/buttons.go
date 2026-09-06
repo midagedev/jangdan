@@ -48,6 +48,7 @@ type padCtl struct {
 	part     engine.Part
 	rect     core.Rect
 	litUntil float64 // 탭 직후 120ms lit
+	litA     float32 // 이번 프레임 lit 합성 알파(drawPadLit이 남긴다 — 테스트·디버그 관측용)
 }
 
 func rectHit(r core.Rect, x, y float64) bool {

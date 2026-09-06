@@ -81,13 +81,15 @@ func TestVuBallistics(t *testing.T) {
 // — 계약↔단언: 패드 lit α 합성 —
 
 func TestPadLitAlpha(t *testing.T) {
+	// 상한 0.20(비전 FIX 2026-09-06 — 구 0.62는 점등 패드 라벨 대비 1.93:1; 이 표의 구 값은 새 상한에서 FAIL했다).
 	cases := []struct{ tap, vu, want float32 }{
-		{0.18, 0.5, 0.37}, // 레벨 0.5 → 0.12+0.25 = 0.37 > 탭 0.18
-		{0.18, 0, 0.18},   // 레벨 0 — 탭 lit 유지(소거 계약)
-		{0, 0.8, 0.52},    // 레벨 단독 0.12+0.4
-		{0, 1, 0.62},      // 상한
-		{0.18, 1, 0.62},   // 상한(탭+레벨 겹침)
-		{0, 0, 0},         // 둘 다 0 — 그리지 않는다
+		{0.18, 0.1, 0.18},   // 레벨 0.1 → 0.12+0.05 = 0.17 < 탭 0.18 → 탭 유지
+		{0.18, 0.15, 0.195}, // 레벨 0.15 → 0.195 > 탭
+		{0.18, 0, 0.18},     // 레벨 0 — 탭 lit 유지(소거 계약)
+		{0, 0.14, 0.19},     // 레벨 단독 0.12+0.07
+		{0, 1, 0.20},        // 상한
+		{0.18, 1, 0.20},     // 상한(탭+레벨 겹침)
+		{0, 0, 0},           // 둘 다 0 — 그리지 않는다
 	}
 	for _, c := range cases {
 		if got := padLitAlpha(c.tap, c.vu); math.Abs(float64(got-c.want)) > 1e-6 {
@@ -159,5 +161,44 @@ func TestMeterDarkWhenLevelsZero(t *testing.T) {
 	h.v.drawMeters(nil, h.ctx)
 	if n := h.v.meterDraws; n != 0 {
 		t.Fatalf("레벨 전부 0인데 미터 그리기 결정 %d건(0 예상)", n)
+	}
+}
+
+// — 계약↔단언: 비전 FIX 2026-09-06 — 점등 패드 워시 상한·베이스 VU 트랙·선택기 분리 —
+
+func TestPadLitCap(t *testing.T) {
+	// 워시 아래 합성 경로: drawPadLit이 litA를 남기고, 레벨 풀스케일이면 상한 0.20(라벨 대비 계약).
+	h := newHarness(t)
+	for i := range h.fb.tick.Levels {
+		h.fb.tick.Levels[i] = 1
+	}
+	h.run(3)
+	h.v.drawPadLit(nil, h.ctx)
+	if a := padAt(h.v, "BD").litA; a != padLitMaxA || padLitMaxA > 0.25 {
+		t.Fatalf("풀스케일 BD litA %v(%v 예상, 상한 ≤0.25)", a, padLitMaxA)
+	}
+}
+
+func TestChordPickerGeometry(t *testing.T) {
+	// 토글 셀은 셀 7의 오른쪽 끝을 유지하고 왼쪽 chordTogGap을 비운다; 외곽선 rect는 띠 사방 inset.
+	h := newHarness(t)
+	c7, tg := h.v.chordCells[7], h.v.chordTogRect
+	if tg[0]+tg[2] != c7[0]+c7[2] || tg[0]-c7[0] != chordTogGap {
+		t.Fatalf("토글 셀 %v vs 셀7 %v", tg, c7)
+	}
+	rr, cr := h.v.chordRingRect, h.v.chordRect
+	if cr[0]-rr[0] != chordOpenInset || rr[2]-cr[2] != 2*chordOpenInset || rr[3]-cr[3] != 2*chordOpenInset {
+		t.Fatalf("외곽선 rect %v vs 띠 %v", rr, cr)
+	}
+	// 꺼진 트랙은 레벨과 무관하게 그려지되 meterDraws(켜진 세그먼트)는 늘리지 않는다.
+	h.v.drawVuBand(nil, h.v.dispRects[0], 0, vuSegsBass, vuBandH)
+	if h.v.meterDraws != 0 {
+		t.Fatalf("레벨 0 트랙 그리기가 meterDraws를 %d로 올림", h.v.meterDraws)
+	}
+	// 12세그먼트 × 5px + 11 간격 = 71 = 창 폭 75 − 2×여백(비전 처방 x 611..682와 일치).
+	r := h.v.dispRects[0]
+	segW := (r[2] - 2*vuSegPad - vuSegGap*float64(vuSegsBass-1)) / float64(vuSegsBass)
+	if r[2] == 75 && segW != 5 {
+		t.Fatalf("세그먼트 폭 %v(5 예상)", segW)
 	}
 }

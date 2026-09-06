@@ -81,6 +81,10 @@ var (
 	// 코드 트랙 띠(§12.3) — RGB는 계약색(colLabel/colLEDOn) 그대로, 알파만 스펙 지정. 새 색 발명이 아니다.
 	colChordEdge = color.NRGBA{0xE8, 0xE2, 0xD2, 89}  // colLabel α0.35 — 셀 외곽선 1px
 	colChordSel  = color.NRGBA{0xFF, 0x9A, 0x3C, 153} // colLEDOn α0.6 — 선택기 현재 값·7th 채움
+	// 선택기 7th 토글 셀 채움 — 하단 표시창 필드색(그림 실측 (99,108,110)). 비전 FIX 2026-09-06:
+	// 도수 셀과 같은 슬레이트라 "B<n> 7"이 8번째 후보로 읽혔다 — 표시창 계열 색으로 분리.
+	colChordTog = color.NRGBA{99, 108, 110, 0xFF}
+	colChordDim = color.NRGBA{0, 0, 0, 77} // 선택기 열림 중 띠 아래 감광(검정 α0.30)
 )
 
 // 라벨·표시 스케일.
@@ -178,10 +182,12 @@ type View struct {
 	scopeRect core.Rect
 	botRect   core.Rect
 
-	chordRect  core.Rect // 코드 트랙 띠(§12.3)
-	chordCells [engine.ChordBars]core.Rect
-	chord      chordState
-	harmonyOK  bool // 화성 API 래치(chord.go 헤더) — 구 호스트 패닉 1회에 끊긴다
+	chordRect     core.Rect // 코드 트랙 띠(§12.3)
+	chordCells    [engine.ChordBars]core.Rect
+	chordTogRect  core.Rect // 선택기 7th 토글 셀(셀 7 − 왼쪽 chordTogGap)
+	chordRingRect core.Rect // 선택기 열림 외곽선 자리(띠 사방 chordOpenInset)
+	chord         chordState
+	harmonyOK     bool // 화성 API 래치(chord.go 헤더) — 구 호스트 패닉 1회에 끊긴다
 
 	selPart engine.Part // 16스텝 편집 대상(기본 BassA)
 	mode    editMode

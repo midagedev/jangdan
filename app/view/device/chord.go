@@ -26,6 +26,10 @@ const (
 	chordSelTout    = 6.0  // 선택기 무조작 닫힘(초)
 	dispKnobValDur  = 2.0  // B 표시창: 노브 접촉 뒤 값 표시 지속(초)
 	chordLabelScale = 0.62 // 코드 트랙 라벨 스케일(버튼 0.45보다 크게 — 비전 FIX 2026-09-06: 10px 로마 숫자는 코드 줄로 안 읽힘)
+	// 선택기 열림 표시(비전 FIX 2026-09-06: 트랙과 선택기가 같은 자리·같은 스타일이라 "열렸다"가 안 읽힘).
+	chordOpenInset  = 12.0 // 띠 rect를 사방 12px 부풀린 둥근 사각 자리(액센트 외곽선)
+	chordOpenStroke = 2.0  // 외곽선 두께(px, colLEDOn)
+	chordTogGap     = 14.0 // 선택기 셀 7("B<n> 7")과 VII 셀 사이 추가 간격(px) — 셀 7은 오른쪽 끝 고정, 폭 −14
 )
 
 // 도수 로마 숫자 표기(0..6 — 자연 마이너의 1·2·4·5도는 소문자, 3·6·7도는 대문자).
@@ -101,6 +105,12 @@ func (v *View) initChord() {
 		v.chordCells[i] = core.Rect{v.chordRect[0] + float64(i)*(w+chordGap), v.chordRect[1], w, v.chordRect[3]}
 	}
 	v.chord.barLblN = -1
+	// 선택기 7th 토글 셀 — 오른쪽 끝을 셀 7과 맞추고 왼쪽을 chordTogGap만큼 비운다.
+	c7 := v.chordCells[engine.ChordBars-1]
+	v.chordTogRect = core.Rect{c7[0] + chordTogGap, c7[1], c7[2] - chordTogGap, c7[3]}
+	// 열림 외곽선 rect(사방 chordOpenInset).
+	v.chordRingRect = core.Rect{v.chordRect[0] - chordOpenInset, v.chordRect[1] - chordOpenInset,
+		v.chordRect[2] + 2*chordOpenInset, v.chordRect[3] + 2*chordOpenInset}
 }
 
 // chordCellAt — 띠 안 좌표의 셀 인덱스(0..7). 띠 밖은 -1. 셀 사이 간격(3px)은 가까운 셀로.

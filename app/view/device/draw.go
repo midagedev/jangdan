@@ -37,12 +37,16 @@ const (
 	ledOff
 )
 
-// Draw — 패널 → 라벨 → LED → 노브 → 오버레이 → 코드 트랙 띠 → 표시창 → 라인 미터 → 스코프.
+// Draw — 패널 → 패드 lit/뮤트(라벨 아래 — 비전 FIX 2026-09-06) → 라벨 → LED → 노브 → 오버레이
+// → 코드 트랙 띠 → 표시창 → 라인 미터 → 스코프.
 func (v *View) Draw(screen *ebiten.Image, ctx *core.Ctx) {
 	v.ensureLayers(ctx)
 	v.op.GeoM.Reset()
 	v.op.ColorScale.Reset()
 	screen.DrawImage(v.panel, &v.op)
+	v.drawPadLit(screen, ctx)
+	v.op.GeoM.Reset()
+	v.op.ColorScale.Reset()
 	screen.DrawImage(v.labelLayer, &v.op)
 	v.drawLEDs(screen, ctx)
 	v.drawKnobs(screen, ctx)
@@ -298,10 +302,12 @@ func (v *View) spriteFor(r float64) *ebiten.Image {
 	return v.spriteImg[best]
 }
 
-// drawOverlays — 패드 lit(탭 120ms·라인 레벨 합성 max — P3-meters)·뮤트 dim(ColorScale 0.55
-// 상당), PLAY 상시 lit(재생 중 또는 제스처 전 가짜 시계), Build 페이즈 중 DROP 펄스. 반투명 사각
-// 1×1 텍스처 확대(옵션 재사용, 할당 0). RESUME lit은 폐지(§12.3 — RESUME은 30초 무접촉 자동).
-func (v *View) drawOverlays(screen *ebiten.Image, ctx *core.Ctx) {
+// drawPadLit — 패드 뮤트 dim(ColorScale 0.55 상당)과 lit 워시(탭 120ms·라인 레벨 합성 max —
+// P3-meters). 라벨 레이어 **아래**에 그린다(비전 FIX 2026-09-06: 워시가 글리프 위에 얹히면
+// 울리는 패드의 이름이 가장 안 읽혔다 — 대비 1.93:1). 워시 상한도 0.22로 내렸다(잉크 라벨 겹침은
+// 글리프가 얇아 실측 2.05:1에 그쳐 폐기). 이번 프레임 알파를 pad.litA에 남긴다(테스트·디버그).
+// 반투명 사각 1×1 텍스처 확대(옵션 재사용, 할당 0).
+func (v *View) drawPadLit(screen *ebiten.Image, ctx *core.Ctx) {
 	for i := range v.pads {
 		p := &v.pads[i]
 		if ctx.Bridge.Muted(p.part) {
@@ -313,10 +319,19 @@ func (v *View) drawOverlays(screen *ebiten.Image, ctx *core.Ctx) {
 		if ctx.Now < p.litUntil {
 			tapA = overlayLitA
 		}
-		if a := padLitAlpha(tapA, vu); a > 0 {
-			v.overlayRect(screen, p.rect, v.white1, a)
+		p.litA = padLitAlpha(tapA, vu)
+		if p.litA > 0 {
+			v.overlayRect(screen, p.rect, v.white1, p.litA)
 		}
-		if vu > 0 {
+	}
+}
+
+// drawOverlays — 라벨 레이어 위: 패드 LED 점, PLAY 상시 lit(재생 중 또는 제스처 전 가짜 시계), Build 페이즈 중 DROP
+// 펄스. RESUME lit은 폐지(§12.3 — RESUME은 30초 무접촉 자동).
+func (v *View) drawOverlays(screen *ebiten.Image, ctx *core.Ctx) {
+	for i := range v.pads {
+		p := &v.pads[i]
+		if vu := v.meters.disp[p.part]; vu > 0 {
 			v.drawPadLED(screen, p.rect, vu)
 		}
 	}
@@ -339,6 +354,14 @@ func (v *View) drawChordTrack(screen *ebiten.Image, ctx *core.Ctx) {
 	}
 	f := ctx.Font
 	if v.chord.open {
+		// 열림 표시(비전 FIX 2026-09-06): 띠 아래 화면 감광 + 띠 둘레 2px 액센트 외곽선.
+		rr := v.chordRingRect
+		below := rr[1] + rr[3]
+		v.fillRectA(screen, core.Rect{0, below, v.layout.Size[0], v.layout.Size[1] - below}, colChordDim)
+		v.fillRectA(screen, core.Rect{rr[0], rr[1], rr[2], chordOpenStroke}, colLEDOn)
+		v.fillRectA(screen, core.Rect{rr[0], below - chordOpenStroke, rr[2], chordOpenStroke}, colLEDOn)
+		v.fillRectA(screen, core.Rect{rr[0], rr[1], chordOpenStroke, rr[3]}, colLEDOn)
+		v.fillRectA(screen, core.Rect{rr[0] + rr[2] - chordOpenStroke, rr[1], chordOpenStroke, rr[3]}, colLEDOn)
 		deg, flags := v.bridgeChord(ctx.Bridge, v.chord.bar)
 		deg %= engine.NumDegrees
 		v.fillRectA(screen, v.chordCells[deg], colChordSel)
@@ -346,7 +369,9 @@ func (v *View) drawChordTrack(screen *ebiten.Image, ctx *core.Ctx) {
 			cx, cy := v.chordCells[i].Center()
 			f.Draw(screen, romanDeg[i], cx, cy, chordLabelScale, colLabel, core.AlignCenter)
 		}
-		c7 := v.chordCells[engine.ChordBars-1]
+		// 7th 토글 셀 — 왼쪽 14px 비우고 표시창 필드색으로 채워 도수 후보와 분리; 켜짐이면 액센트 채움.
+		c7 := v.chordTogRect
+		v.fillRectA(screen, c7, colChordTog)
 		if flags&engine.ChordSeventh != 0 {
 			v.fillRectA(screen, c7, colChordSel)
 		}
