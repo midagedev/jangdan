@@ -66,8 +66,8 @@ var (
 	// (200,110,40)/나머지 (120,80,50))은 페인팅에 남아 있지 않고, 그대로 쓰면 R max/min 게이트(≤1.3)를
 	// 깬다(200/120=1.67) — 측정 중앙값 단일색으로 통일(보고서 참조).
 	colStepFace = color.NRGBA{0x92, 0x5E, 0x3B, 0xFF} // #925E3B = (146,94,59) — 16스텝 버튼 면 공통
-	// 이름판 좌측 밴드 패치색 — bassA·bassB·drums·fx·mixer·fx2 순. 판 내부 중앙값(테두리·잔글자 제외 영역).
-	colPlateBand = [6]color.NRGBA{
+	// 이름판 좌측 밴드 패치색 — bassA·bassB·drums·fx·mixer·fx2·poly 순. 판 내부 중앙값(테두리·잔글자 제외 영역).
+	colPlateBand = [7]color.NRGBA{
 		{0xDB, 0xD3, 0xBF, 0xFF}, // (219,211,191)
 		{0xDB, 0xD3, 0xBF, 0xFF}, // (219,211,191)
 		{0xDA, 0xD0, 0xB6, 0xFF}, // (218,208,182)
@@ -75,6 +75,9 @@ var (
 		// P4-scroll: 새 두 모듈은 §13.3 보라 (120,80,150) 계열 띠다 — panel-v3 실측 중앙값.
 		{0x84, 0x5B, 0x8B, 0xFF}, // mixer (132,91,139)
 		{0x84, 0x5B, 0x95, 0xFF}, // fx2 (132,91,149)
+		// P5-poly: 패널은 아직 와이어프레임(그림 라운드가 panel.png를 칠한다) — wire.py 섹션
+		// 띠 틴트 (60,130,170)를 임시로 쓰고, 채색 병합 뒤 리드가 패널 실측 중앙값으로 재조정한다.
+		{0x3C, 0x82, 0xAA, 0xFF}, // poly (60,130,170)
 	}
 	// 베이스라인 표시창 창색 — 창 청정부(하단 20px) 중앙값. 불투명 채움으로 페인팅 잔글자("68."류)를 차단.
 	colDispWin = [2]color.NRGBA{
@@ -101,7 +104,8 @@ const (
 	dispBottomScale   = 0.6
 )
 
-// 섹션 인덱스. mixer·fx2는 P4-scroll 랙 확장(§13.3) — 스크롤 없이는 화면에 없다.
+// 섹션 인덱스. mixer·fx2는 P4-scroll 랙 확장(§13.3), poly는 P5-poly(§14.1) —
+// 스크롤 없이는 화면에 없다.
 const (
 	secBassA = 0
 	secBassB = 1
@@ -109,6 +113,7 @@ const (
 	secFx    = 3
 	secMixer = 4
 	secFx2   = 5
+	secPoly  = 6
 )
 
 const numBassSecBtns = 10 // 베이스라인 섹션 버튼(saw..patD) 수
@@ -181,8 +186,8 @@ type View struct {
 	hasTitle      bool
 	bassPlates    [2]core.Rect
 	hasBassPlate  [2]bool
-	sectionPlates [4]core.Rect // drums·fx·mixer·fx2 이름판(라벨용)
-	hasSection    [4]bool
+	sectionPlates [5]core.Rect // drums·fx·mixer·fx2·poly 이름판(라벨용)
+	hasSection    [5]bool
 
 	dispRects [2]core.Rect
 	hasDisp   [2]bool
@@ -203,7 +208,7 @@ type View struct {
 	nptrs int
 
 	// 스크롤 랙(§13.3 — 상태·입력·그리기 전부 scroll.go가 소유한다). rack은 New에서
-	// 1회 만드는 레이아웃 크기(720×1800) 오프스크린 — Draw 본문을 전부 여기에 그린 뒤
+	// 1회 만드는 레이아웃 크기(720×2000, v4) 오프스크린 — Draw 본문을 전부 여기에 그린 뒤
 	// scrollY만큼 올려 화면에 blit한다. sptrs는 포인터의 화면 좌표 사본(ctx.Pointers는
 	// 재사용 슬라이스라 수정 금지) — 제스처는 화면 좌표계로 재고, 레이아웃 좌표 변환
 	// (y+scrollY)의 단일 소유자는 press()의 히트 판정이다(scroll.go 헤더 참조).
@@ -215,7 +220,8 @@ type View struct {
 	sptrs           [8]core.Pointer
 	disp            [2]bassDisp
 	bottom          bottomDisp
-	meters          meters // 라인 VU 밸리스틱(P3-meters) — 파트 8 + 마스터
+	meters          meters  // 라인 VU 밸리스틱(P3-meters) — 파트 8 + 마스터
+	polyTrigT       float64 // 폴리 트리거 점 최종 점화 시각(ctx.Now, −1 = 미점화 — P5-poly)
 
 	// 재구성 카운터 — 표시창 캐시 계약의 테스트 근거.
 	rebuilds int
@@ -235,6 +241,7 @@ type View struct {
 	spriteCls  []float64
 	ledImg     [3]*ebiten.Image // on/mid/off
 	padLEDImg  *ebiten.Image    // 패드 라인 LED 점 r4(P3-meters) — newView(테스트)에서는 nil
+	polyDotImg *ebiten.Image    // 폴리 트리거 점 r4(P5-poly) — newView(테스트)에서는 nil
 	ledR       float64
 	white1     *ebiten.Image
 	black1     *ebiten.Image
@@ -270,7 +277,7 @@ func New(ctx *core.Ctx) (*View, error) {
 		return nil, fmt.Errorf("device: 패널 디코드: %w", err)
 	}
 	v.panel = ebiten.NewImageFromImage(img)
-	// 랙 오프스크린(레이아웃 크기 = 720×1800) — 스크롤 blit의 원본 한 장. 여기서만 만든다.
+	// 랙 오프스크린(레이아웃 크기 = 720×2000, v4) — 스크롤 blit의 원본 한 장. 여기서만 만든다.
 	v.rack = ebiten.NewImage(int(l.Size[0]), int(l.Size[1]))
 
 	type cls struct {
@@ -309,7 +316,8 @@ func New(ctx *core.Ctx) (*View, error) {
 	v.ledImg[0] = ebiten.NewImageFromImage(ledCircle(maxR, colLEDOn))
 	v.ledImg[1] = ebiten.NewImageFromImage(ledCircle(maxR, colLEDMid))
 	v.ledImg[2] = ebiten.NewImageFromImage(ledCircle(maxR, colLEDOff))
-	v.padLEDImg = ebiten.NewImageFromImage(ledCircle(padLEDR, colLEDOn)) // 패드 라인 LED 점(P3-meters)
+	v.padLEDImg = ebiten.NewImageFromImage(ledCircle(padLEDR, colLEDOn))  // 패드 라인 LED 점(P3-meters)
+	v.polyDotImg = ebiten.NewImageFromImage(ledCircle(polyTrigR, colLCD)) // 폴리 트리거 점(P5-poly)
 	v.white1 = ebiten.NewImageFromImage(solid1x1(color.NRGBA{0xFF, 0xFF, 0xFF, 0xFF}))
 	v.black1 = ebiten.NewImageFromImage(solid1x1(color.NRGBA{0, 0, 0, 0xFF}))
 	v.initStrokeOpts()
@@ -318,7 +326,7 @@ func New(ctx *core.Ctx) (*View, error) {
 
 // newView — 레이아웃만 파싱해 컨트롤 인덱스를 구축한다(이미지 없음 — 유닛 테스트 경로).
 func newView(l *core.DeviceLayout) (*View, error) {
-	v := &View{layout: l, selPart: engine.BassA, fxPlay: -1, fxRec: -1, harmonyOK: true}
+	v := &View{layout: l, selPart: engine.BassA, fxPlay: -1, fxRec: -1, harmonyOK: true, polyTrigT: -1}
 	v.disp[0].knob, v.disp[1].knob = -1, -1
 	for s := 0; s < 2; s++ {
 		for j := range v.secLEDs[s] {
@@ -329,17 +337,24 @@ func newView(l *core.DeviceLayout) (*View, error) {
 		v.fxLEDs[i] = -1
 	}
 
-	secOf := map[string]uint8{"basslineA": secBassA, "basslineB": secBassB, "drums": secDrums, "fx": secFx, "mixer": secMixer, "fx2": secFx2}
+	secOf := map[string]uint8{"basslineA": secBassA, "basslineB": secBassB, "drums": secDrums, "fx": secFx, "mixer": secMixer, "fx2": secFx2, "poly": secPoly}
 	for _, k := range l.Knobs {
-		id, ok := core.KnobParam(k.Section, k.Name)
-		if !ok {
-			return nil, fmt.Errorf("device: 노브 %q/%q의 파라미터 매핑 없음", k.Section, k.Name)
-		}
 		sec, ok := secOf[k.Section]
 		if !ok {
 			return nil, fmt.Errorf("device: 노브 %q의 알 수 없는 섹션 %q", k.Name, k.Section)
 		}
-		v.knobs = append(v.knobs, knob{name: k.Name, label: knobLabel(sec, k.Name), sec: sec, cx: k.CX, cy: k.CY, r: k.R, id: id})
+		kn := knob{name: k.Name, label: knobLabel(sec, k.Name), sec: sec, cx: k.CX, cy: k.CY, r: k.R}
+		// 매핑 3단계: 전역 ParamID → 장치 로컬(§14.1 DeviceParam — 지금은 poly 8종) → 매핑
+		// 없음은 레이아웃 오류(기존 계약 유지). dev 노브의 id는 0으로 남지만 쓰는 경로가
+		// 없다(knobValue·sendParam이 dev 분기 — JustGrabbed는 dev 노브를 보고하지 않는다).
+		if id, ok := core.KnobParam(k.Section, k.Name); ok {
+			kn.id = id
+		} else if slot, dk, ok := core.KnobDevParam(k.Section, k.Name); ok {
+			kn.dev, kn.slot, kn.k = true, slot, dk
+		} else {
+			return nil, fmt.Errorf("device: 노브 %q/%q의 파라미터 매핑 없음", k.Section, k.Name)
+		}
+		v.knobs = append(v.knobs, kn)
 	}
 	for _, b := range l.Buttons {
 		sec, ok := secOf[b.Section]
@@ -410,6 +425,8 @@ func newView(l *core.DeviceLayout) (*View, error) {
 			v.sectionPlates[2], v.hasSection[2] = pl.Rect, true
 		case "fx2":
 			v.sectionPlates[3], v.hasSection[3] = pl.Rect, true
+		case "poly": // P5-poly — 트리거 점(draw.go)과 라벨이 이 판 rect를 쓴다
+			v.sectionPlates[4], v.hasSection[4] = pl.Rect, true
 		}
 	}
 	for _, d := range l.Displays {
@@ -575,6 +592,11 @@ func (v *View) Update(ctx *core.Ctx) {
 	}
 	v.chordIdleClose(ctx.Now)
 	v.meters.update(ctx.Tick, float32(ctx.DT))
+	// 폴리 트리거 점(P5-poly): FlagPoly 프레임에 점화 시각을 래치 — 감쇠 계산은 그리기 쪽
+	// (polyTrigA). 비교·대입뿐이라 무할당 계약 안.
+	if ctx.Tick.Flags&engine.FlagPoly != 0 {
+		v.polyTrigT = ctx.Now
+	}
 	v.cacheChord(ctx)
 	v.cacheDisplays(ctx)
 }

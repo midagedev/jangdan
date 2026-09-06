@@ -36,8 +36,8 @@
 //
 //	계약                                    | 단언
 //	----------------------------------------|----------------------------------------------
-//	빈 판 드래그 → scrollY(클램프 0..520)    | TestScrollDragClamp: −200px→200·과다→520·맨위→0,
-//	                                        |   손 뗀 뒤 무관성(v 0 유지)
+//	빈 판 드래그 → scrollY(클램프 0..max)    | TestScrollDragClamp: −200px→200·과다→max·맨위→0,
+//	  max = 레이아웃 높이−1280(v4 = 720)     |   손 뗀 뒤 무관성(v 0 유지)
 //	컨트롤 우선 — 노브 시작 드래그는 스크롤   | TestKnobDragNoScroll: CUTOFF −200px → SetParam만,
 //	                                        |   불변 scrollY 0
 //	관성 ×0.9/프레임·|v|<2px 정지·경계 정지  | TestScrollInertia: ≤60프레임 내 정지·이후 불변,
@@ -50,6 +50,28 @@
 //	휠 NaN·거대 값 방어·인디케이터 기하        | TestScrollClamp: NaN/±Inf/±거대 → 경계, scrollIndGeom
 //	                                        |   길이 1280²/1800·y 비례
 //	스크롤 상태 Update 무할당                 | TestScrollNoAlloc: scrollY 200·관성 감쇠 중·잡은 채 셋 다 0
+//
+// — P5-poly 계약↔단언(폴리 리드 모듈 바인딩 — §14.1 DeviceParam·§12.3 폴리 문단) —
+//
+//	계약                                    | 단언
+//	----------------------------------------|----------------------------------------------
+//	poly 노브 8 = KnobDevParam(슬롯 7, k)    | TestLayoutCounts: 노브 55·이름판 8·dev 노브 8개
+//	                                        |   전부 (슬롯 7, k 0..7), 전역 노브 47 매핑 불변
+//	dev 노브 드래그 → DeviceParam{A:7,B:k}  | TestPolyKnobDevParam: 스크롤 상태(cy 1886−scrollY)
+//	  (SetParam 0개)                        |   드래그 → DeviceParam 정확히 1개·SetParam 0개,
+//	                                        |   미러 갱신·JustGrabbed 미보고(전역 id 오염 봉쇄)
+//	표시값 = DevParam(음수·NaN→기본값,       | TestPolyKnobDevParam: 미러 0.25 추적·−1/NaN →
+//	  1 초과 클램프)                        |   DevParamDefault(7,0)=0.55·2.0 → 1
+//	릴리스 후 브리지 값 복귀(로컬 잔존 無)   | TestPolyKnobDevParam: 드래그 릴리스 뒤 dev 노브
+//	                                        |   표시값이 미러를 다시 따름
+//	탭 스윕도 DeviceParam 경로               | TestPolyKnobSweep: 스윕 전 송신이 DeviceParam뿐,
+//	                                        |   SetParam 0개, 최종값 = 시작값 ±1/4095
+//	라벨 표 CUT/RESO/ENV/ATK/DEC/REL/DET/LVL| TestPolyLabels: 8종 표 + 띠색 (60,130,170)
+//	FlagPoly 프레임 점등·150ms 감쇠          | TestPolyTrigDot: 미점화 0·점화 α=1·9프레임(150ms)
+//	                                        |   뒤 < 0.1·무할당(스테디 Update에 FlagPoly 상시)
+//	poly 없는 구 레이아웃 → New 성공·판 없음 | TestPolyAbsentOldLayout: poly 노브·판 제거 뷰 OK,
+//	                                        |   dev 노브 0·hasSection[4] false·scrollMax 불변
+//	매핑 없는 poly 노브 이름 → New 에러      | TestPolyUnknownKnobName: TEMPO 이름 → 매핑 없음
 //
 // FAIL-first(구현 전 소스에서 실측, 2026-09-06):
 //
@@ -71,11 +93,21 @@
 //	→ 전 테스트가 newView에서 "device: 노브 "mixer"/"REV_A"의 파라미터 매핑 없음"으로 사망
 //	  (layout.json은 이미 v3인데 KnobParam이 mixer/fx2를 모름). 매핑 추가 뒤에는
 //	  TestLayoutCounts "노브 47개(29 예상)"가 유일 적색 — 실측 갱신으로 닫았다.
+//
+// P5-poly(2026-09-06) FAIL-first(구현 전 소스 — v4 레이아웃 반영 전, 같은 형태):
+//
+//	go test ./app/view/device/ -count=1
+//	→ 전 테스트가 newView에서 "device: 노브 "poly"/"CUTOFF"의 파라미터 매핑 없음"으로 사망
+//	  (layout.json은 이미 v4 poly 8노브를 데리고 있는데 KnobParam이 poly를 모른다).
+//	  KnobDevParam 폴백 추가 뒤 TestLayoutCounts "노브 47개(55 예상)"·"이름판 7개(8 예상)"
+//	  이 다음 적색 — 실측 갱신으로 닫았다.
 package device
 
 import (
 	"fmt"
+	"image/color"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/midagedev/jangdan/app/assets"
@@ -155,6 +187,10 @@ func (f *fakeBridge) Cmd(c engine.Cmd, a core.Author) {
 	case engine.SetParam:
 		if c.A < uint8(engine.NumParams) {
 			f.params[c.A] = c.V
+		}
+	case engine.DeviceParam: // P5-poly — 폴리 슬롯 로컬 파라미터 미러(송신→표시값 추적 단언용)
+		if c.A == uint8(engine.SlotPoly) && c.B < uint8(engine.DevParams) {
+			f.devParams[c.B] = c.V
 		}
 	case engine.BassStep:
 		if c.A <= 1 {
@@ -293,8 +329,9 @@ func pressButton(h *harness, b *button) {
 func TestLayoutCounts(t *testing.T) {
 	h := newHarness(t)
 	// P4-scroll(v3 레이아웃): 믹서 노브 12·fx2 6, fx2 장식 버튼 4, 믹서 활동 LED 8·fx2 장식 LED 4 추가.
-	if len(h.v.knobs) != 47 {
-		t.Fatalf("노브 %d개(47 예상)", len(h.v.knobs))
+	// P5-poly(v4): 폴리 노브 8·이름판 1 추가 — 노브 47+8 = 55, 이름판 7+1 = 8.
+	if len(h.v.knobs) != 55 {
+		t.Fatalf("노브 %d개(55 예상)", len(h.v.knobs))
 	}
 	if len(h.v.buttons) != 42 {
 		t.Fatalf("버튼 %d개(42 예상)", len(h.v.buttons))
@@ -305,14 +342,26 @@ func TestLayoutCounts(t *testing.T) {
 	if len(h.v.leds) != 48 {
 		t.Fatalf("LED %d개(48 예상)", len(h.v.leds))
 	}
-	if len(h.v.layout.Plates) != 7 {
-		t.Fatalf("이름판 %d개(7 예상)", len(h.v.layout.Plates))
+	if len(h.v.layout.Plates) != 8 {
+		t.Fatalf("이름판 %d개(8 예상)", len(h.v.layout.Plates))
 	}
-	// 29/29 노브가 KnobParam으로 매핑됨(newView는 실패 시 에러 — 여기까지 온 것이 증거).
+	// 55 노브 전부가 전역 KnobParam 또는 장치 로컬 KnobDevParam(슬롯 7)으로 매핑 —
+	// dev 노브는 정확히 8개(레이아웃 poly 섹션과 1:1). 매핑 안 된 노브는 newView가 이미 에러.
+	dev := 0
 	for _, k := range h.v.knobs {
-		if _, ok := core.KnobParam(sectionName(k.sec), k.name); !ok {
-			t.Fatalf("노브 %s 매핑 실패", k.name)
+		if _, ok := core.KnobParam(sectionName(k.sec), k.name); ok {
+			if k.dev {
+				t.Fatalf("노브 %s 전역 매핑인데 dev 플래그", k.name)
+			}
+			continue
 		}
+		if !k.dev || k.slot != engine.SlotPoly || k.k < 0 || k.k >= engine.PolyParams {
+			t.Fatalf("노브 %s(%s) 매핑 오류(dev %v, 슬롯 %d, k %d)", k.name, sectionName(k.sec), k.dev, k.slot, k.k)
+		}
+		dev++
+	}
+	if dev != 8 {
+		t.Fatalf("장치 로컬 노브 %d개(8 예상)", dev)
 	}
 	// 6/6 패드가 PadPart(2..7)로 매핑됨.
 	for _, p := range h.v.pads {
@@ -350,8 +399,10 @@ func sectionName(sec uint8) string {
 		return "fx"
 	case secMixer:
 		return "mixer"
+	case secFx2:
+		return "fx2"
 	}
-	return "fx2"
+	return "poly"
 }
 
 // — 계약↔단언: 히트 —
@@ -1218,5 +1269,249 @@ func TestStepFaceColor(t *testing.T) {
 	}
 	if g := int(colStepFace.G); g < 60 || g > 130 {
 		t.Fatalf("스텝 면 G = %d(패널 중앙값 (146,94,59) 대역 예상)", g)
+	}
+}
+
+// — 계약↔단언: 폴리 리드 모듈 바인딩(P5-poly — §14.1 DeviceParam) —
+
+// devHostileBridge — DevParam이 고정값 하나만 돌려주는 적대 브리지(3클래스 입력 방어:
+// 음수(미러 부재 신호)·NaN·1 초과). 나머지는 fakeBridge에 위임한다.
+type devHostileBridge struct {
+	*fakeBridge
+	v float32
+}
+
+func (b *devHostileBridge) DevParam(slot, k int) float32 { return b.v }
+
+// TestPolyKnobDevParam — 장치 로컬 노브의 값 소스·송신·잔존 없음. dev 분기는
+// knobValue·sendParam에만 있으므로 히트·드래그 상태기계는 전역 노브과 같은 경로를 쓴다.
+func TestPolyKnobDevParam(t *testing.T) {
+	h := newHarness(t)
+	k := knobAt(h.v, secPoly, "CUTOFF")
+	if k == nil {
+		t.Fatal("poly CUTOFF 노브 없음")
+	}
+	if !k.dev || k.slot != engine.SlotPoly || k.k != engine.PolyCutoff {
+		t.Fatalf("CUTOFF 매핑 (dev %v, 슬롯 %d, k %d)((true, %d, %d) 예상)", k.dev, k.slot, k.k, engine.SlotPoly, engine.PolyCutoff)
+	}
+	// 값 소스: 전역 파라미터가 아니라 미러(devParams[0]). 기본값 0이 아닌 0.25를 심어 구분.
+	h.fb.devParams[0] = 0.25
+	h.frame()
+	if got := h.v.knobValue(h.ctx, k); math.Abs(float64(got)-0.25) > 1e-6 {
+		t.Fatalf("미러 표시값 %v(0.25 예상)", got)
+	}
+	// 스크롤 상태(cy 1886 → 화면 y = cy − scrollY)에서 드래그 → DeviceParam 정확히 1개,
+	// SetParam 0개(전역 파라미터 오염 봉쇄). 200px 상승 = 0.25+1.0 → 클램프 1.
+	h.v.scrollY = h.v.scrollMax - 20
+	sy := k.cy - h.v.scrollY
+	if sy < 0 || sy >= core.LogicalH {
+		t.Fatalf("화면 y %v가 화면 밖(scrollMax %v)", sy, h.v.scrollMax)
+	}
+	h.frame(ptrPress(-1, k.cx, sy))
+	if _, ok := h.v.JustGrabbed(); ok {
+		t.Fatal("dev 노브 잡음이 JustGrabbed에 전역 ParamID로 보고됨(레지던트 거짓 잠금 봉쇄 위반)")
+	}
+	h.fb.cmds = nil
+	h.frame(ptrMove(-1, k.cx, sy-200))
+	dp, sp := 0, 0
+	var last engine.Cmd
+	for _, r := range h.fb.cmds {
+		switch r.c.Kind {
+		case engine.DeviceParam:
+			dp++
+			last = r.c
+		case engine.SetParam:
+			sp++
+		}
+	}
+	if dp != 1 || sp != 0 {
+		t.Fatalf("드래그 프레임 DeviceParam %d·SetParam %d(1·0 예상)", dp, sp)
+	}
+	if last.A != uint8(engine.SlotPoly) || last.B != uint8(engine.PolyCutoff) || last.V != 1 {
+		t.Fatalf("DeviceParam = %+v({A:7 B:0 V:1} 예상)", last)
+	}
+	if h.fb.devParams[0] != 1 {
+		t.Fatalf("미러 갱신 안 됨 %v(1 예상)", h.fb.devParams[0])
+	}
+	// 무변화 프레임 → 송신 0(전역 노브 계약과 같은 절약).
+	h.fb.cmds = nil
+	h.frame(ptrMove(-1, k.cx, sy-200))
+	if len(h.fb.cmds) != 0 {
+		t.Fatalf("무변화 프레임 송신 %d개(0 예상)", len(h.fb.cmds))
+	}
+	// 이동 200px ≥ 탭 → 릴리스에 스윕 없음. useLocal 해제 → 표시값은 다시 미러를 따른다
+	// (뷰 전환 후에도 로컬 값이 얼어붙지 않는다는 잔존 클래스의 직접 단언).
+	h.fb.devParams[0] = 0.4
+	h.frame(ptrRel(-1, k.cx, sy-200))
+	if k.swActive {
+		t.Fatal("이동 릴리스에 스윕 시작(탭 아닌데)")
+	}
+	if got := h.v.knobValue(h.ctx, k); math.Abs(float64(got)-0.4) > 1e-6 {
+		t.Fatalf("릴리스 후 표시값 %v(미러 0.4 예상 — 로컬 잔존)", got)
+	}
+	// 3클래스 입력 방어: 미러 부재(음수)·NaN → 기본값 폴백, 1 초과 → 클램프.
+	wantDef := core.DevParamDefault(engine.SlotPoly, engine.PolyCutoff)
+	for _, c := range []struct {
+		v    float32
+		want float32
+	}{{-1, wantDef}, {math.Float32frombits(0x7F800001), wantDef}, {2, 1}, {0.7, 0.7}} {
+		h.ctx.Bridge = &devHostileBridge{fakeBridge: h.fb, v: c.v}
+		if got := h.v.knobValue(h.ctx, k); got != c.want {
+			t.Fatalf("적대 미러 %v → 표시값 %v(%v 예상)", c.v, got, c.want)
+		}
+	}
+	h.ctx.Bridge = h.fb
+}
+
+// TestPolyKnobSweep — 탭 스윕도 sendParam을 경유하므로 DeviceParam뿐이다: 스윕 전체에서
+// SetParam 0개, 최종 송신값 = 시작값(미러) ±1/4095.
+func TestPolyKnobSweep(t *testing.T) {
+	h := newHarness(t)
+	k := knobAt(h.v, secPoly, "LEVEL") // k = 7 — B 비트까지 정확히 보는 쪽
+	if k == nil || k.k != engine.PolyLevel {
+		t.Fatal("poly LEVEL 노브 없음(k 7 예상)")
+	}
+	h.fb.devParams[engine.PolyLevel] = 0.3
+	h.frame(ptrPress(-1, k.cx, k.cy-h.v.scrollY))
+	h.frame(ptrRel(-1, k.cx, k.cy-h.v.scrollY)) // 이동 0 → 탭 → 2바 스윕
+	if !k.swActive {
+		t.Fatal("탭 릴리스에 스윕 미시작")
+	}
+	h.fb.cmds = nil
+	h.run(300) // 130BPM 2바 ≈ 3.69s + 여유
+	dp, sp := 0, 0
+	var lastV float32
+	for _, r := range h.fb.cmds {
+		if r.c.Kind == engine.DeviceParam {
+			if r.c.A != uint8(engine.SlotPoly) || r.c.B != uint8(engine.PolyLevel) {
+				t.Fatalf("DeviceParam = %+v(A 7·B 7 예상)", r.c)
+			}
+			dp++
+			lastV = r.c.V
+		}
+		if r.c.Kind == engine.SetParam {
+			sp++
+		}
+	}
+	if dp < 10 || sp != 0 {
+		t.Fatalf("스윕 송신 DeviceParam %d·SetParam %d(≥10·0 예상)", dp, sp)
+	}
+	if math.Abs(float64(lastV-0.3)) > 1.0/4095 {
+		t.Fatalf("최종 송신값 %v(시작값 0.3 ±1/4095 예상)", lastV)
+	}
+	if math.Abs(float64(h.fb.devParams[engine.PolyLevel]-0.3)) > 1.0/4095 {
+		t.Fatalf("미러 최종값 %v(0.3 ±1/4095 예상)", h.fb.devParams[engine.PolyLevel])
+	}
+	if k.swActive || k.useLocal {
+		t.Fatal("스윕 완료 후 활성/로컬 잔존")
+	}
+}
+
+// TestPolyLabels — 라벨 축약 표(r25 라벨판 폭)·섹션 띠 임시색(와이어프레임 틴트).
+func TestPolyLabels(t *testing.T) {
+	for _, c := range []struct{ name, want string }{
+		{"CUTOFF", "CUT"}, {"RESO", "RESO"}, {"ENV", "ENV"}, {"ATTACK", "ATK"},
+		{"DECAY", "DEC"}, {"RELEASE", "REL"}, {"DETUNE", "DET"}, {"LEVEL", "LVL"},
+	} {
+		if got := knobLabel(secPoly, c.name); got != c.want {
+			t.Fatalf("knobLabel(poly, %s) = %q(%q 예상)", c.name, got, c.want)
+		}
+	}
+	if got := knobLabel(secPoly, "TEMPO"); got != "TEMPO" {
+		t.Fatalf("표 밖 이름 %q(그대로 예상)", got)
+	}
+	if colPlateBand[6] != (color.NRGBA{R: 60, G: 130, B: 170, A: 255}) {
+		t.Fatalf("poly 띠색 %v((60,130,170) 예상 — 채색 병합 뒤 재조정)", colPlateBand[6])
+	}
+	if len(colPlateBand) != 7 {
+		t.Fatalf("띠색 표 %d항(7 예상)", len(colPlateBand))
+	}
+}
+
+// TestPolyTrigDot — 트리거 점 알파: 미점화 0, 점화 프레임 1, 150ms(9프레임) 뒤 < 0.1.
+// 시계 감쇠 이전 프레임(경계 이동 등)도 안전하게 1로 클램프.
+func TestPolyTrigDot(t *testing.T) {
+	h := newHarness(t)
+	if a := h.v.polyTrigA(h.ctx.Now); a != 0 {
+		t.Fatalf("미점화 α = %v(0 예상)", a)
+	}
+	h.fb.tick.Flags = engine.FlagPoly
+	h.frame()
+	h.fb.tick.Flags = 0
+	if a := h.v.polyTrigA(h.ctx.Now); a != 1 {
+		t.Fatalf("점화 프레임 α = %v(1 예상)", a)
+	}
+	if a := h.v.polyTrigA(h.ctx.Now - 0.05); a != 1 {
+		t.Fatalf("감쇠 이전 경계 α = %v(1 클램프 예상)", a)
+	}
+	h.run(9) // 9 × 1/60 = 0.15s — e^−3 ≈ 0.0498
+	if a := h.v.polyTrigA(h.ctx.Now); a >= 0.1 {
+		t.Fatalf("150ms 뒤 α = %v(< 0.1 예상)", a)
+	}
+	h.run(60)
+	if a := h.v.polyTrigA(h.ctx.Now); a > 1.0/255 {
+		t.Fatalf("2.5s 뒤 α = %v(사실상 0 예상)", a)
+	}
+}
+
+// TestPolyAbsentOldLayout — 방어 1: poly 노브·이름판이 없는 구(v3) 레이아웃에서도
+// newView는 성공해야 한다(폴백 경로는 KnobDevParam 실패 = 그냥 그 노브가 없을 뿐).
+// dev 노브 0개·poly 판 부재·스크롤 상한은 레이아웃 높이에서 유도되므로 그대로.
+func TestPolyAbsentOldLayout(t *testing.T) {
+	l, err := core.LoadDeviceLayout(assets.DeviceLayoutJSON)
+	if err != nil {
+		t.Fatalf("레이아웃 파싱: %v", err)
+	}
+	maxWithPoly := l.Size[1] - core.LogicalH
+	knobs := make([]core.Knob, 0, len(l.Knobs))
+	for _, k := range l.Knobs {
+		if k.Section != "poly" {
+			knobs = append(knobs, k)
+		}
+	}
+	l.Knobs = knobs
+	plates := make([]core.For, 0, len(l.Plates))
+	for _, p := range l.Plates {
+		if p.For != "poly" {
+			plates = append(plates, p)
+		}
+	}
+	l.Plates = plates
+	v, err := newView(l)
+	if err != nil {
+		t.Fatalf("poly 없는 레이아웃 newView: %v", err)
+	}
+	for _, k := range v.knobs {
+		if k.dev {
+			t.Fatalf("dev 노브 잔존 %s", k.name)
+		}
+	}
+	if v.hasSection[secPoly-2] {
+		t.Fatal("poly 이름판이 없는데 hasSection[4] true")
+	}
+	if math.Abs(v.scrollMax-maxWithPoly) > 1e-9 {
+		t.Fatalf("scrollMax %v(%v 예상 — 높이 유도)", v.scrollMax, maxWithPoly)
+	}
+}
+
+// TestPolyUnknownKnobName — poly 섹션의 매핑 없는 이름(전역 이름 차용 포함)은 레이아웃
+// 오류(기존 계약 유지) — 조용한 무시가 아니라 New 실패.
+func TestPolyUnknownKnobName(t *testing.T) {
+	l, err := core.LoadDeviceLayout(assets.DeviceLayoutJSON)
+	if err != nil {
+		t.Fatalf("레이아웃 파싱: %v", err)
+	}
+	for i := range l.Knobs {
+		if l.Knobs[i].Section == "poly" {
+			l.Knobs[i].Name = "TEMPO" // 전역 fx 이름 — poly에선 매핑 없음
+			break
+		}
+	}
+	_, err = newView(l)
+	if err == nil {
+		t.Fatal("매핑 없는 poly 노브 이름이 newView를 통과")
+	}
+	if !strings.Contains(err.Error(), "매핑 없음") {
+		t.Fatalf("에러 문구 %q(기존 계약 \"매핑 없음\" 예상)", err.Error())
 	}
 }

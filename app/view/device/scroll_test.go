@@ -21,12 +21,15 @@ const (
 	emptyY = 950.0
 )
 
-// TestScrollDragClamp — 빈 판 잡기 드래그: dy만큼 scrollY 이동, 0..520 클램프.
+// TestScrollDragClamp — 빈 판 잡기 드래그: dy만큼 scrollY 이동, 0..max 클램프.
 // 잡는 순간 이전 관성은 끊긴다(새 잡기 v=0). 놓기만 하고 이동 0이면 관성도 없다.
 func TestScrollDragClamp(t *testing.T) {
 	h := newHarness(t)
-	if m := h.v.scrollMax; math.Abs(m-520) > 1e-9 {
-		t.Fatalf("scrollMax = %v(1800−1280 = 520 예상)", m)
+	// 상한은 레이아웃 높이에서 유도한다(v4 = 2000−1280 = 720 — P5-poly 폴리 패널 추가).
+	// 숫자를 박으면 다음 레이아웃 확장 때 이 테스트가 거짓 빨강이 된다.
+	want := h.v.layout.Size[1] - core.LogicalH
+	if m := h.v.scrollMax; math.Abs(m-want) > 1e-9 {
+		t.Fatalf("scrollMax = %v(%v 예상 — 레이아웃 높이 %v − 1280)", m, want, h.v.layout.Size[1])
 	}
 	// 이동 없이 눌렀다 놓기 → 관성 없음(잡는 순간 v=0이고 이동 프레임이 없다).
 	h.frame(ptrPress(-1, emptyX, emptyY))
@@ -44,7 +47,7 @@ func TestScrollDragClamp(t *testing.T) {
 	if math.Abs(h.v.scrollY-200) > 1e-9 {
 		t.Fatalf("드래그 −200px 후 scrollY = %v(200 예상)", h.v.scrollY)
 	}
-	// 과다 드래그 → 상한 520 클램프(잡은 채).
+	// 과다 드래그 → 상한 max 클램프(잡은 채).
 	h.frame(ptrMove(-1, emptyX, emptyY-2000))
 	if h.v.scrollY != h.v.scrollMax {
 		t.Fatalf("과다 드래그 후 scrollY = %v(%v 클램프 예상)", h.v.scrollY, h.v.scrollMax)
@@ -89,7 +92,7 @@ func TestKnobDragNoScroll(t *testing.T) {
 // 경계에 닿아 더 못 가면 즉시 정지(반발 없음).
 func TestScrollInertia(t *testing.T) {
 	h := newHarness(t)
-	// v = −30(px/프레임)로 놓기: 총 이동 ≈ 30·Σ0.9^k ≈ 300px — 520에 못 미친다.
+	// v = −30(px/프레임)로 놓기: 총 이동 ≈ 30·Σ0.9^k ≈ 300px — max(720)에 못 미친다.
 	h.frame(ptrPress(-1, emptyX, emptyY))
 	h.frame(ptrMove(-1, emptyX, emptyY-30))
 	h.frame(ptrRel(-1, emptyX, emptyY-30))
@@ -134,7 +137,7 @@ func TestScrolledKnobHit(t *testing.T) {
 	h.v.scrollY = 400
 	k := knobAt(h.v, secFx2, "REV_SIZE")
 	if k.cy != 1638 {
-		t.Fatalf("REV_SIZE cy = %v(레이아웃 v3 = 1638 예상 — 레이아웃이 바뀌면 이 테스트 값도 함께)", k.cy)
+		t.Fatalf("REV_SIZE cy = %v(레이아웃 v3·v4 공통 = 1638 예상 — 레이아웃이 바뀌면 이 테스트 값도 함께)", k.cy)
 	}
 	sy := k.cy - h.v.scrollY
 	if sy >= core.LogicalH {
@@ -176,7 +179,7 @@ func TestScrollSecondPointerIgnored(t *testing.T) {
 // 눌림이 스크롤 제스처로 넘어가지 않는다(버튼 히트가 빈 판보다 우선).
 func TestDecoButtons(t *testing.T) {
 	h := newHarness(t)
-	h.v.scrollY = h.v.scrollMax // 520 — 버튼 행(레이아웃 y 1724)이 화면 1204에 온다
+	h.v.scrollY = h.v.scrollMax // v4 720 — 버튼 행(레이아웃 y 1724)이 화면 1004에 온다
 	want := map[string]string{"rev_on": "REV", "cho_on": "CHO", "rev_pre": "PRE", "cho_st": "ST"}
 	for name, lbl := range want {
 		b := btnAt(h.v, secFx2, name)
@@ -237,7 +240,8 @@ func TestScrollDisabledShortLayout(t *testing.T) {
 }
 
 // TestScrollClamp — 경계·입력 방어(방어 2): NaN·음수 → 0, 상한 초과·거대 값 → max.
-// 인디케이터 기하(§13.3): 길이 = 1280²/1800, y는 scrollY에 비례, 끝에서 정확히 맞닿는다.
+// 인디케이터 기하(§13.3): 길이 = 1280²/레이아웃 높이, y는 scrollY에 비례, 끝에서 정확히
+// 맞닿는다. 높이·상한은 레이아웃에서 유도(v4 = 2000·720 — 하드코딩 폐지).
 func TestScrollClamp(t *testing.T) {
 	h := newHarness(t)
 	if got := h.v.clampScroll(math.NaN()); got != 0 {
@@ -252,15 +256,16 @@ func TestScrollClamp(t *testing.T) {
 	if got := h.v.clampScroll(math.Inf(1)); got != h.v.scrollMax {
 		t.Fatalf("clampScroll(+Inf) = %v(%v 예상)", got, h.v.scrollMax)
 	}
-	hh := float64(core.LogicalH) * float64(core.LogicalH) / 1800
-	if y, gh := scrollIndGeom(0, 520, 1800); y != 0 || math.Abs(gh-hh) > 1e-9 {
+	layH := h.v.layout.Size[1]
+	hh := float64(core.LogicalH) * float64(core.LogicalH) / layH
+	if y, gh := scrollIndGeom(0, h.v.scrollMax, layH); y != 0 || math.Abs(gh-hh) > 1e-9 {
 		t.Fatalf("scrollIndGeom(0) = (%v,%v)(0,%v 예상)", y, gh, hh)
 	}
-	y, _ := scrollIndGeom(520, 520, 1800)
+	y, _ := scrollIndGeom(h.v.scrollMax, h.v.scrollMax, layH)
 	if math.Abs(y-(float64(core.LogicalH)-hh)) > 1e-9 {
 		t.Fatalf("scrollIndGeom(맨 아래) y = %v(%v 예상 — 끝 정렬)", y, float64(core.LogicalH)-hh)
 	}
-	y2, _ := scrollIndGeom(260, 520, 1800)
+	y2, _ := scrollIndGeom(h.v.scrollMax/2, h.v.scrollMax, layH)
 	if math.Abs(y2-y/2) > 1e-9 {
 		t.Fatalf("scrollIndGeom(중간) y = %v(%v = 절반 예상 — 비례)", y2, y/2)
 	}

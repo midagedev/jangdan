@@ -2,6 +2,10 @@
 //
 // 값 소스 계약: 잡히지 않은 노브는 매 프레임 Bridge.Param(레지던트·리플레이가 움직인 값),
 // 잡히거나 스윕 중인 노브는 로컬 값. SetParam은 값이 바뀔 때만, 노브당 프레임마다 최대 1개.
+//
+// 장치 로컬 노브(P5-poly, §14.1): 전역 ParamID가 아니라 (슬롯, k) 장치 파라미터를 움직인다.
+// dev 분기는 knobValue·sendParam 두 곳에만 있다 — 히트·드래그·스윕 상태기계는 전역 노브와
+// 같은 코드를 공유한다(구조 봉쇄: dev 가지가 흩어지지 않게).
 package device
 
 import (
@@ -16,9 +20,15 @@ import (
 type knob struct {
 	name      string
 	label     string // 패널에 그리는 표시명(드럼·믹서·fx2는 내부명과 다르다 — knobLabel)
-	sec       uint8  // secBassA..secFx2
+	sec       uint8  // secBassA..secPoly
 	cx, cy, r float64
 	id        engine.ParamID
+
+	// 장치 로컬 파라미터(P5-poly — §14.1 DeviceParam). dev=false면 id가, dev=true면
+	// (slot, k)가 이 노브의 값 소스·송신 대상이다(id는 쓰는 경로가 없다).
+	dev  bool
+	slot int
+	k    int
 
 	held     bool    // 이번 순간 포인터에 잡힘(그리기 밝기)
 	useLocal bool    // 잡힘 또는 스윕 중 → 표시값은 local
@@ -39,6 +49,7 @@ type knob struct {
 // 품고 있어 그대로 올리면 내부명이 노출된다 — 표시명(LEVEL)만 쓰고 보이스명은 패드 라벨이
 // 담당한다(비전 판정 2026-09-05 처방). 믹서·fx2(§13.3)는 버스 접두(REV_·CHO_)를 떼고
 // 나머지 밑줄은 공백(REV_BD→"BD", LEVEL_A→"LEVEL A", CHO_RATE→"RATE").
+// 폴리(P5-poly)는 노브 피치 80px의 r25 라벨판 폭에 맞춘 3~4자 축약 표.
 // 나머지 섹션은 레이아웃 이름 그대로. 구성 시 1회라 무할당 규칙 밖이다.
 func knobLabel(sec uint8, name string) string {
 	switch sec {
@@ -49,6 +60,21 @@ func knobLabel(sec uint8, name string) string {
 	case secMixer, secFx2:
 		n := strings.TrimPrefix(strings.TrimPrefix(name, "REV_"), "CHO_")
 		return strings.ReplaceAll(n, "_", " ")
+	case secPoly:
+		switch name {
+		case "CUTOFF":
+			return "CUT"
+		case "ATTACK":
+			return "ATK"
+		case "DECAY":
+			return "DEC"
+		case "RELEASE":
+			return "REL"
+		case "DETUNE":
+			return "DET"
+		case "LEVEL":
+			return "LVL"
+		}
 	}
 	return name
 }
@@ -73,6 +99,18 @@ func (v *View) knobValue(ctx *core.Ctx, k *knob) float32 {
 	if k.useLocal {
 		return k.local
 	}
+	if k.dev {
+		// 장치 로컬 미러(§14.1): 음수 = 미러 부재 → 기본값 폴백. NaN도 무신호로 폴백,
+		// 1 초과는 클램프 — 표시값은 어떤 브리지에서든 0..1(3클래스 입력 방어).
+		val := ctx.Bridge.DevParam(k.slot, k.k)
+		if val != val || val < 0 {
+			return core.DevParamDefault(k.slot, k.k)
+		}
+		if val > 1 {
+			return 1
+		}
+		return val
+	}
 	return ctx.Bridge.Param(k.id)
 }
 
@@ -85,7 +123,10 @@ func (v *View) grabKnob(ctx *core.Ctx, k int) {
 	kn.useLocal = true
 	kn.local = val
 	kn.lastSent = val
-	if !v.grabOK {
+	// JustGrabbed는 전역 ParamID(MANUAL 잠금 대상)를 보고한다 — 장치 로컬 노브는 id가
+	// 무의미하므로 보고하지 않는다(res.Lock(0)이 베이스 A TUNE을 거짓 잠금하는 부류 봉쇄).
+	// 장치 로컬 잠금 id는 코어 확정 과제(보고서 참조).
+	if !v.grabOK && !kn.dev {
 		v.grabID, v.grabOK = kn.id, true
 	}
 	if kn.sec <= secBassB {
@@ -157,9 +198,14 @@ func (v *View) runSweeps(ctx *core.Ctx) {
 	}
 }
 
-// sendParam — 값 송신(노브당 프레임 최대 1회는 호출부가 보장).
+// sendParam — 값 송신(노브당 프레임 최대 1회는 호출부가 보장). 전역 노브는 SetParam,
+// 장치 로컬 노브(P5-poly)는 DeviceParam(A=슬롯, B=k) — 드래그·탭 스윕 모두 이 경로뿐이다.
 func (v *View) sendParam(ctx *core.Ctx, k *knob, val float32) {
-	ctx.Bridge.Cmd(engine.Cmd{Kind: engine.SetParam, A: uint8(k.id), V: val}, core.Human)
+	if k.dev {
+		ctx.Bridge.Cmd(engine.Cmd{Kind: engine.DeviceParam, A: uint8(k.slot), B: uint8(k.k), V: val}, core.Human)
+	} else {
+		ctx.Bridge.Cmd(engine.Cmd{Kind: engine.SetParam, A: uint8(k.id), V: val}, core.Human)
+	}
 	k.lastSent = val
 }
 
