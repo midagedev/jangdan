@@ -10,10 +10,14 @@
 package device
 
 import (
+	"bytes"
+	"image"
+	"sort"
 	"testing"
 
 	"github.com/hajimehoshi/ebiten/v2"
 
+	"github.com/midagedev/jangdan/app/assets"
 	"github.com/midagedev/jangdan/app/core"
 	"github.com/midagedev/jangdan/engine"
 )
@@ -425,5 +429,50 @@ func TestCableGroupCount(t *testing.T) {
 	t.Logf("기본 랙 케이블 %d개 → 색 그룹 %d개(상한 %d)", n, len(seen), maxCableGroups)
 	if len(seen) > maxCableGroups {
 		t.Fatalf("그룹 %d > 상한 %d — 초과분이 마지막 그룹 색으로 그려진다", len(seen), maxCableGroups)
+	}
+}
+
+// TestCableColorsMatchPanel — 케이블 색(colCable)이 뒷면 패널의 섹션 색 띠 실측과 같은가.
+// 색은 "이 줄이 어디서 나오는가"의 유일한 단서라 그림과 어긋나면 배선이 거짓말을 한다.
+// 그림 라운드가 패널을 바꾸면 이 게이트가 먼저 걸린다(2026-09-06 채택본 시드 1234 기준).
+// 허용 오차 6은 팔레트 양자화(256색 저장)와 중앙값 계산의 여유다.
+func TestCableColorsMatchPanel(t *testing.T) {
+	l, err := core.LoadRearLayout(assets.DeviceRearJSON)
+	if err != nil {
+		t.Fatalf("rear.json: %v", err)
+	}
+	data, err := assets.Read("device/rear.png")
+	if err != nil {
+		t.Skipf("rear.png 없음(데스크톱 embed 경로 밖): %v", err)
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("rear.png 디코드: %v", err)
+	}
+	for i := range l.Devices {
+		d := &l.Devices[i]
+		x0, y0 := int(d.Rect[0])+4, int(d.Rect[1])+10
+		x1, y1 := int(d.Rect[0])+16, int(d.Rect[1]+d.Rect[3])-10
+		var rs, gs, bs []int
+		for y := y0; y < y1; y++ {
+			for x := x0; x < x1; x++ {
+				r, g, b, _ := img.At(x, y).RGBA()
+				rs = append(rs, int(r>>8))
+				gs = append(gs, int(g>>8))
+				bs = append(bs, int(b>>8))
+			}
+		}
+		sort.Ints(rs)
+		sort.Ints(gs)
+		sort.Ints(bs)
+		mid := len(rs) / 2
+		want := colCable[d.Slot]
+		got := [3]int{rs[mid], gs[mid], bs[mid]}
+		for k, v := range [3]int{int(want.R), int(want.G), int(want.B)} {
+			if diff := got[k] - v; diff > 6 || diff < -6 {
+				t.Errorf("슬롯 %d(%s) 띠 실측 %v ≠ colCable %v", d.Slot, d.Name, got, want)
+				break
+			}
+		}
 	}
 }

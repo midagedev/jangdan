@@ -16,3 +16,7 @@ dist/
 cf/node_modules/
 cf/.wrangler/
 app/web/assets/
+
+# 파이썬 바이트코드(도구 실행 부산물)
+__pycache__/
+*.pyc
