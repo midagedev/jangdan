@@ -163,6 +163,19 @@ func appendCmd(b []byte, c *engine.Cmd) []byte {
 	case engine.SetChord, engine.BassMode:
 		b = append(b, c.A, c.B, c.C)
 	case engine.Drop, engine.ResetPos:
+	// 장치 그래프(§14.1) — Connect·DeviceParam의 V는 SetParam과 같은 u16 양자화.
+	case engine.AddDevice:
+		b = append(b, c.A, c.B)
+	case engine.RemoveDevice:
+		b = append(b, c.A)
+	case engine.Connect:
+		n := quantizeV(c.V)
+		b = append(b, c.A, c.B, c.C, c.D, byte(n), byte(n>>8))
+	case engine.Disconnect:
+		b = append(b, c.A, c.B, c.C)
+	case engine.DeviceParam:
+		n := quantizeV(c.V)
+		b = append(b, c.A, c.B, byte(n), byte(n>>8))
 	}
 	return b
 }
@@ -351,8 +364,48 @@ func readCmd(raw []byte, pos int, kind byte) (c engine.Cmd, qv uint16, npos int,
 		return c, 0, pos + 3, true
 	case engine.Drop, engine.ResetPos:
 		return c, 0, pos, true
+	case engine.AddDevice:
+		if pos+2 > len(raw) {
+			return c, 0, -1, false
+		}
+		c.A, c.B = raw[pos], raw[pos+1]
+		return c, 0, pos + 2, true
+	case engine.RemoveDevice:
+		if pos+1 > len(raw) {
+			return c, 0, -1, false
+		}
+		c.A = raw[pos]
+		return c, 0, pos + 1, true
+	case engine.Connect:
+		if pos+6 > len(raw) {
+			return c, 0, -1, false
+		}
+		c.A, c.B, c.C, c.D = raw[pos], raw[pos+1], raw[pos+2], raw[pos+3]
+		q := uint16(raw[pos+4]) | uint16(raw[pos+5])<<8
+		if q > engine.ParamSteps {
+			q = engine.ParamSteps
+		}
+		c.V = float32(q) / engine.ParamSteps
+		return c, 0, pos + 6, true
+	case engine.Disconnect:
+		if pos+3 > len(raw) {
+			return c, 0, -1, false
+		}
+		c.A, c.B, c.C = raw[pos], raw[pos+1], raw[pos+2]
+		return c, 0, pos + 3, true
+	case engine.DeviceParam:
+		if pos+4 > len(raw) {
+			return c, 0, -1, false
+		}
+		c.A, c.B = raw[pos], raw[pos+1]
+		q := uint16(raw[pos+2]) | uint16(raw[pos+3])<<8
+		if q > engine.ParamSteps {
+			q = engine.ParamSteps
+		}
+		c.V = float32(q) / engine.ParamSteps
+		return c, 0, pos + 4, true
 	default:
-		// 알 수 없는 Kind(≥ NumCmdKinds — 위 switch가 계약 내 12종 전부를 커버한다):
+		// 알 수 없는 Kind(≥ NumCmdKinds — 위 switch가 계약 내 17종 전부를 커버한다):
 		// 필드 길이를 알 수 없으므로 0바이트로 간주해 건너뛴다. 이 규칙 때문에 미래
 		// 버전이 필드 있는 새 Kind를 추가하려면 길이 바이트가 필요하다.
 		return c, 0, pos, false

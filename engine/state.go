@@ -2,9 +2,9 @@
 //
 // 키프레임은 바 경계의 제어 상태다: 파라미터·패턴·슬롯·뮤트·조성·코드 트랙·모드·트랜스포트.
 // 보이스 내부 상태(필터 메모리·엔벨로프·딜레이 버퍼)는 포함하지 않는다 — 복원은 바 경계에서만 의미가 있다.
-// 레이아웃 v3(리틀엔디언, 고정 StateSize 바이트 — §13.1 파라미터 33→59로 v2에서 +52):
+// 레이아웃 v4(리틀엔디언, 고정 StateSize 바이트 — v3 748바이트 뒤에 랙(§14.1)을 덧붙인다):
 //
-//	[0..2)          magic 'J','3'
+//	[0..2)          magic 'J','4'
 //	[2..120)        params[59] uint16
 //	[120..632)      bass 패턴 2파트 × 8슬롯 × 16스텝 × (note u8 = 도수 표기, flags u8)
 //	[632..728)      drum 패턴 6보이스 × 16스텝 × flags u8
@@ -17,16 +17,16 @@
 //	[743..748)      예약(0)
 //
 // ReadState는 검증 후 폐기가 아니라 재정규화한다(note>MaxNote → MaxNote, flags 마스킹, 슬롯 &7,
-// 키 %12, 도수 %7, 모드·방향 범위 밖은 0). v2('J','2', 696바이트) 이하는 거부한다 — 새
-// 파라미터(믹서·버스 26개)의 기본값 해석이 없어 반쪽 상태가 되고, 지속 저장된
-// 키프레임은 없다(메모리·리플레이 전용 — 로그 재생이 정본). v1('J','1', 684바이트)도
-// 거부다(v1 당시부터 note 의미가 절대음→도수로 바뀌어 호환이 없다).
+// 키 %12, 도수 %7, 모드·방향 범위 밖은 0). 랙은 빈 랙에서 슬롯·케이블을 하나씩 다시 놓으며
+// 정규화한다(종류 범위 밖·인스턴스 중복·포트 범위 밖·순환 케이블은 버린다, Main이 없으면 놓는다 —
+// 결속 케이블 게인은 파라미터에서 다시 유도). v3('J','3', 748바이트) 이하는 거부한다 — 랙 표가
+// 없어 반쪽 상태가 되고, 지속 저장된 키프레임은 없다(메모리·리플레이 전용 — 로그 재생이 정본).
 // 이 파일에는 곱셈-덧셈이 없다.
 package engine
 
 const (
 	stateMagic0 = 'J'
-	stateMagic1 = '3'
+	stateMagic1 = '4'
 
 	offParams  = 2
 	offBassPat = offParams + 2*int(NumParams)        // 120
@@ -37,7 +37,14 @@ const (
 	offMode    = offKey + 1                          // 732 (2바이트)
 	offPlaying = offMode + 2                         // 734
 	offChord   = offPlaying + 1                      // 735 (8바이트)
-	StateSize  = offChord + ChordBars + 5            // 748
+	offRack    = offChord + ChordBars + 5            // 748 (v3 크기)
+	offInst    = offRack + RackSlots                 // 764
+	offNCables = offInst + RackSlots                 // 780
+	offCables  = offNCables + 1                      // 781
+	cableBytes = 6
+	offDevPar  = offCables + RackCables*cableBytes     // 1165
+	DevParams  = 8                                     // 슬롯당 로컬 파라미터 수(상태 예약 — P5-poly)
+	StateSize  = offDevPar + RackSlots*DevParams*2 + 3 // 1424
 )
 
 // WriteState — 현재 제어 상태를 dst에 쓴다. len(dst) < StateSize이면 0을 돌려주고 아무것도 쓰지 않는다.
@@ -82,6 +89,22 @@ func (e *Engine) WriteState(dst []byte) int {
 	}
 	for b := 0; b < ChordBars; b++ {
 		dst[offChord+b] = e.chordDeg[b] | e.chordFlags[b]<<3
+	}
+	r := &e.rack
+	for s := 0; s < RackSlots; s++ {
+		dst[offRack+s] = byte(r.kind[s])
+		dst[offInst+s] = r.inst[s]
+	}
+	dst[offNCables] = byte(r.nCables)
+	for i := 0; i < r.nCables; i++ {
+		c := &r.cables[i]
+		o := offCables + cableBytes*i
+		dst[o] = c.src
+		dst[o+1] = c.dst
+		dst[o+2] = c.sp | c.dp<<4
+		dst[o+3] = byte(c.bind)
+		dst[o+4] = byte(c.gainQ)
+		dst[o+5] = byte(c.gainQ >> 8)
 	}
 	return StateSize
 }
@@ -142,5 +165,26 @@ func (e *Engine) ReadState(src []byte) bool {
 		e.chordDeg[b] = src[offChord+b] & 7 % NumDegrees
 		e.chordFlags[b] = src[offChord+b] >> 3 & ChordSeventh
 	}
+	// 랙 — 빈 랙에서 다시 놓는다(placeDevice·connect가 범위·중복·순환을 거른다).
+	r := &e.rack
+	r.reset()
+	for s := 0; s < RackSlots; s++ {
+		r.placeDevice(s, DeviceKind(src[offRack+s]), src[offInst+s])
+	}
+	if !r.hasKind(KindMain) {
+		if !r.placeDevice(SlotMain, KindMain, 0) {
+			for s := 0; s < RackSlots && !r.placeDevice(s, KindMain, 0); s++ {
+			}
+		}
+	}
+	n := int(src[offNCables])
+	if n > RackCables {
+		n = RackCables
+	}
+	for i := 0; i < n; i++ {
+		o := offCables + cableBytes*i
+		r.connect(src[o], src[o+2]&0x0F, src[o+1], src[o+2]>>4, ParamID(src[o+3]), uint16(src[o+4])|uint16(src[o+5])<<8)
+	}
+	r.rebind(&e.params)
 	return true
 }

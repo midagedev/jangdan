@@ -47,34 +47,50 @@ func TestFx2DefaultHash(t *testing.T) {
 	}
 }
 
-// 2. 센드 0 버스는 비트 단위 바이패스 — dry를 그대로(±0 부호 포함) 돌려준다.
-//    "0을 더한다"가 아니라 "더하지 않는다"가 계약(§13.1 해시 근거).
+// 2. 센드 0 리버브·코러스는 비트 단위 바이패스 — dry를 그대로(±0 부호 포함) 돌려준다.
+//    "0을 더한다"가 아니라 "더하지 않는다"가 계약(§13.1 해시 근거). 랙(rack.go)에서는
+//    게인>0 입력 케이블이 없는 장치가 live=false가 되고 그 출력 케이블은 Main 합산에서
+//    건너뛰어진다 — 포트 값을 직접 심어 sumInputs로 단언한다.
 func TestFx2BusBypassBitIdentity(t *testing.T) {
-	var m mixBus // 전 필드 0 — 센드 전부 0, revOn/choOn false
-	for _, id := range [...]ParamID{RevSize, RevDamp, RevMix, ChoRate, ChoDepth, ChoMix} {
-		m.setParam(id, 0.5)
+	e := New(1)
+	for p := Part(0); p < NumParts; p++ {
+		e.SetParam(RevSend(p), 0)
 	}
-	parts := [8]float32{float32(math.Copysign(0, -1)), 0.25, -0.3, 0, 0, 0, 0, float32(math.NaN())}
-	for _, dry := range [...]float32{float32(math.Copysign(0, -1)), 0, 0.4922174, -0.7} {
-		l, r := m.process(&parts, dry, -dry)
-		if math.Float32bits(l) != math.Float32bits(dry) || math.Float32bits(r) != math.Float32bits(-dry) {
-			t.Fatalf("바이패스 비트 불일치: dry %v/%v → %v/%v (센드 0인데 리턴이 닿음)", dry, -dry, l, r)
+	e.SetParam(ChoSendA, 0)
+	e.SetParam(ChoSendB, 0)
+	r := &e.rack
+	if r.live[SlotReverb] || r.live[SlotChorus] {
+		t.Fatal("센드 전부 0인데 리버브/코러스가 live")
+	}
+	negz := float32(math.Copysign(0, -1))
+	r.port[SlotReverb] = [MaxOutPorts]float32{0.5, 0.5}    // 죽은 장치의 잔존 포트 값 — 닿으면 안 된다
+	r.port[SlotChorus] = [MaxOutPorts]float32{negz, 0.25}
+	for _, dry := range [...]float32{negz, 0, 0.4922174, -0.7} {
+		r.port[SlotFx][0], r.port[SlotFx][1] = dry, -dry
+		var in [MaxInPorts]float32
+		r.sumInputs(SlotMain, &in)
+		if math.Float32bits(in[0]) != math.Float32bits(dry) || math.Float32bits(in[1]) != math.Float32bits(-dry) {
+			t.Fatalf("바이패스 비트 불일치: dry %v/%v → %v/%v (센드 0인데 리턴이 닿음)", dry, -dry, in[0], in[1])
 		}
 	}
-	// 센드를 켜고 다시 0으로 — 활성 플래그 갱신(캐시)이 올바르게 꺼지는지.
-	m.setParam(RevSend(BD), 1)
-	m.setParam(ChoSendA, 1)
-	if !m.revOn || !m.choOn {
-		t.Fatal("센드 켠 뒤 revOn/choOn 미설정")
+	// 센드를 켜고 다시 0으로 — live 플래그 갱신(recompute)이 올바르게 꺼지는지.
+	e.SetParam(RevSend(BD), 1)
+	e.SetParam(ChoSendA, 1)
+	if !r.live[SlotReverb] || !r.live[SlotChorus] {
+		t.Fatal("센드 켠 뒤 live 미설정")
 	}
-	m.setParam(RevSend(BD), 0)
-	m.setParam(ChoSendA, 0)
-	if m.revOn || m.choOn {
-		t.Fatal("센드 0으로 돌아갔는데 revOn/choOn 잔존")
+	e.SetParam(RevSend(BD), 0)
+	e.SetParam(ChoSendA, 0)
+	if r.live[SlotReverb] || r.live[SlotChorus] {
+		t.Fatal("센드 0으로 돌아갔는데 live 잔존")
 	}
-	l, r := m.process(&parts, float32(math.Copysign(0, -1)), 0)
-	if math.Float32bits(l) != math.Float32bits(float32(math.Copysign(0, -1))) || math.Float32bits(r) != 0 {
-		t.Fatalf("재바이패스 비트 불일치: %v %v", l, r)
+	// NaN 입력 방어: 파트 포트가 NaN이면 리버브 입력은 0.
+	e.SetParam(RevSend(CY), 1)
+	r.port[SlotDrums][2+int(CY-BD)] = float32(math.NaN())
+	var in [MaxInPorts]float32
+	r.sumInputs(SlotReverb, &in)
+	if in[0] != 0 {
+		t.Fatalf("NaN 파트 → 리버브 입력 %v, want 0", in[0])
 	}
 }
 
@@ -153,22 +169,24 @@ func TestFx2ReverbTail(t *testing.T) {
 // 4. 코러스 — ChoSendA=1·ChoDepth=1에서 출력이 dry와 다르고 |out| ≤ 0.9903
 //    (리턴이 클립 뒤에 더해져도 마지막 busClip이 상한을 지킨다, §13.2).
 func TestFx2Chorus(t *testing.T) {
-	var m mixBus
-	m.setParam(ChoSendA, 1)
-	m.setParam(ChoDepth, 1)
-	m.setParam(ChoMix, 1)
-	var parts [8]float32
+	// 코러스 장치 + Main 합산(케이블 게인 = ChoMix 1 → boundGain 0.8) + busClamp — 랙이 하는
+	// 연산을 그대로 펼친 형태(rack.go sumInputs 규칙: dry 대입 뒤 리턴 덧셈).
+	var c chorus
+	c.setRate(0.5)
+	c.setDepth(1)
+	mix := boundGain(ChoMix, 1)
 	diff, peak := false, float32(0)
 	for i := 0; i < 48000; i++ {
-		parts[0] = 0.7
+		in := float32(0.7)
 		if i%2 == 1 { // 변조가 있는 입력 — 상수면 지연 읽기가 dry와 같아진다
-			parts[0] = -0.7
+			in = -0.7
 		}
 		dry := float32(0.9)
 		if i%3 == 0 {
 			dry = -0.9
 		}
-		l, r := m.process(&parts, dry, dry)
+		cl, cr := c.process(mul32(in, 1))
+		l, r := busClamp(dry+mul32(cl, mix)), busClamp(dry+mul32(cr, mix))
 		if l != dry || r != dry {
 			diff = true
 		}
@@ -209,7 +227,7 @@ func TestFx2NoAllocs(t *testing.T) {
 	}
 }
 
-// 6. 상태 v3 — Write→Read로 파라미터 59개 전부 ParamQ 동일, v2 매직·짧은 입력 거부.
+// 6. 상태 — Write→Read로 파라미터 59개 전부 ParamQ 동일, 구버전 매직·짧은 입력 거부.
 func TestFx2StateV3(t *testing.T) {
 	a := New(5)
 	a.SetParam(BassALevel, 0.3)
@@ -228,8 +246,8 @@ func TestFx2StateV3(t *testing.T) {
 	if n := a.WriteState(buf[:]); n != StateSize {
 		t.Fatalf("WriteState %d, want %d", n, StateSize)
 	}
-	if buf[0] != 'J' || buf[1] != '3' {
-		t.Fatalf("매직 %q%q, want J3", buf[0], buf[1])
+	if buf[0] != 'J' || buf[1] != '4' {
+		t.Fatalf("매직 %q%q, want J4", buf[0], buf[1])
 	}
 	f := New(9)
 	if !f.ReadState(buf[:]) {
@@ -240,11 +258,13 @@ func TestFx2StateV3(t *testing.T) {
 			t.Fatalf("Param %d 불일치 %d vs %d", i, a.ParamQ(ParamID(i)), f.ParamQ(ParamID(i)))
 		}
 	}
-	// v2(696바이트 'J','2')는 거부 — 새 파라미터 해석이 없다(§13.1·state.go 주석).
-	v2 := make([]byte, 696)
-	v2[0], v2[1] = 'J', '2'
-	if f.ReadState(v2) {
-		t.Fatal("v2 매직을 받아들임 — 거부 계약")
+	// v3(748바이트 'J','3')·v2는 거부 — 랙 표·새 파라미터 해석이 없다(state.go 주석).
+	for _, old := range [...][2]int{{'3', 748}, {'2', 696}} {
+		v := make([]byte, StateSize) // 길이를 채워도 매직으로 거부
+		v[0], v[1] = 'J', byte(old[0])
+		if f.ReadState(v) {
+			t.Fatalf("v%c 매직을 받아들임 — 거부 계약", old[0])
+		}
 	}
 	if f.ReadState(buf[:StateSize-1]) {
 		t.Fatal("짧은 입력을 받아들임")

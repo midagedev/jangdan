@@ -34,6 +34,12 @@ const (
 	SetChord                     // A=bar(0..7) B=degree(0..6) C=flags(ChordSeventh) — 즉시(현재 마디면 다음 스텝부터)
 	BassMode                     // A=Part(0|1) B=mode(ModeBass|ModeArp|ModeChord) C=dir(DirUp|DirDown|DirUpDown)
 	Transport                    // A=1 재생 / 0 정지                 — 정지는 위치 동결·보이스 노트오프, 재생은 다음 스텝 0부터
+	// 장치 그래프(§14.1, rack.go) — 실패(점유·범위 밖·순환·표 가득)는 무동작.
+	AddDevice    // A=slot(0..15) B=DeviceKind                          — 빈 슬롯에 장치(인스턴스가 남아 있을 때)
+	RemoveDevice // A=slot                                              — 장치와 닿는 케이블 전부 제거(Main 불가)
+	Connect      // A=src slot B=dst slot C=srcPort|dstPort<<4 D=bind(ParamID, ≥NumParams=비결속) V=게인(비결속일 때)
+	Disconnect   // A=src slot B=dst slot C=srcPort|dstPort<<4
+	DeviceParam  // A=slot B=k V=값                                     — 장치 로컬 파라미터(로컬 파라미터가 있는 종류만)
 	NumCmdKinds
 )
 

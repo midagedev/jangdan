@@ -110,6 +110,11 @@ func TestV2AllKindsFraming(t *testing.T) {
 		{Kind: engine.SetChord, A: 7, B: 4, C: engine.ChordSeventh},
 		{Kind: engine.BassMode, A: 0, B: engine.ModeArp, C: engine.DirUpDown},
 		{Kind: engine.Transport, A: 1},
+		{Kind: engine.AddDevice, A: 9, B: uint8(engine.KindReverb)},
+		{Kind: engine.RemoveDevice, A: 9},
+		{Kind: engine.Connect, A: 0, B: 3, C: 0 | 1<<4, D: 0xFF, V: 0.7},
+		{Kind: engine.Disconnect, A: 0, B: 3, C: 0 | 1<<4},
+		{Kind: engine.DeviceParam, A: 9, B: 3, V: 0.25},
 	}
 	l := &Log{}
 	for i := range cmds {
@@ -129,9 +134,9 @@ func TestV2AllKindsFraming(t *testing.T) {
 		if got.A != c.A || got.B != c.B || got.C != c.C || got.D != c.D {
 			t.Errorf("Kind %v 필드 왕복: %+v, want %+v", c.Kind, got, c)
 		}
-		if c.Kind == engine.SetParam {
+		if c.Kind == engine.SetParam || c.Kind == engine.Connect || c.Kind == engine.DeviceParam {
 			if got.V != float32(quantizeV(c.V))/engine.ParamSteps {
-				t.Errorf("SetParam 값 왕복: %v", got.V)
+				t.Errorf("%v 값 왕복: %v", c.Kind, got.V)
 			}
 		} else if got.V != 0 {
 			t.Errorf("Kind %v: V는 0이어야 한다: %v", c.Kind, got.V)

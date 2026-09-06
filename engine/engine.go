@@ -65,13 +65,17 @@ type Engine struct {
 	// 파트별 블록 피크(프리 FX 출력 abs 최대, Part 순 BassA BassB BD SD CH OH CP CY).
 	// Render가 마스터 peak과 같은 자리에서 모은다 — sample의 partOut(베이스)과
 	// drumKit.last(드럼 항)이 샘플별 원본이다. 라인별 LED·VU 미터의 원본.
-	levels  [8]float32
-	partOut [2]float32 // 이번 샘플의 베이스 파트별 출력(sample이 대입 — 레벨 집계용)
+	levels [8]float32
 
+	// 장치 인스턴스(종류별 고정 배열 — rack.go kindCap)와 랙(슬롯·케이블·위상 순서).
+	// 어느 슬롯이 어느 인스턴스인지는 rack.kind/inst가 소유한다(§14.1).
 	bass  [2]bassVoice
+	lvl   [2]float32 // 베이스 채널 레벨(BassALevel/BassBLevel — 기본 1.0은 mul32(x,1)==x 항등)
 	drums drumKit
 	fx    fxChain
-	bus   mixBus // §13.2 — 센드·리버브·코러스 버스(fx2.go)
+	rev   reverb
+	cho   chorus
+	rack  rack
 }
 
 // New — 유일한 할당 지점. seed에서 초기 패턴을 만들고 기본 파라미터를 적용한다.
@@ -94,6 +98,7 @@ func (e *Engine) Reset(seed uint32) {
 	e.bass[1].init(seed ^ 0x7F4A7C15)
 	e.drums.init(seed ^ 0x3C6EF372)
 	e.fx.init()
+	e.rack.buildDefault() // 기본 랙(§14.1) — 아래 DefaultParams 적용이 결속 케이블 게인을 채운다
 	e.playing = true
 	e.keyRoot = uint8(seed % NumKeys) // 세션 조성은 시드가 고른다(resident도 같은 식 seed%12로 SetKey를 낸다)
 	e.pendingKey = e.keyRoot
@@ -218,11 +223,23 @@ func (e *Engine) setParamQ(id ParamID, n uint16) {
 		e.samplesPerStep = SampleRate * 60.0 / BPMOf(q) / 4.0
 		e.fx.setTempo(e.samplesPerStep)
 		e.dropDec = float32(1.0 / (8.0 * 16.0 * e.samplesPerStep))
-	case id >= BassALevel: // 33..58 — 믹서·리버브·코러스 버스(fx2.go)
-		e.bus.setParam(id, q)
+	case id == BassALevel:
+		e.lvl[0] = q
+	case id == BassBLevel:
+		e.lvl[1] = q
+	case id == RevSize:
+		e.rev.setSize(q)
+	case id == RevDamp:
+		e.rev.setDamp(q)
+	case id == ChoRate:
+		e.cho.setRate(q)
+	case id == ChoDepth:
+		e.cho.setDepth(q)
+	case id >= BassALevel: // 센드·리턴(RevSend·DelaySend·ChoSend·RevMix·ChoMix) — 결속 케이블 게인만
 	default: // Delay, Drive, Comp, Master
 		e.fx.setParam(int(id-Delay), q)
 	}
+	e.rack.setBound(id, q) // 이 파라미터에 결속된 케이블(기본 랙의 센드·리턴, 사용자 결속)의 게인 유도
 }
 
 // Apply — 명령 적용. 무할당. 범위 밖은 정규화(step&15, slot&7, note 클램프), 파트 범위 밖은 무동작.
@@ -299,6 +316,20 @@ func (e *Engine) Apply(c Cmd) {
 			e.bass[0].noteOff()
 			e.bass[1].noteOff()
 		}
+	// 장치 그래프(§14.1, rack.go). 실패(점유·범위 밖·순환·표 가득)는 무동작.
+	case AddDevice:
+		e.rack.addDevice(int(c.A), DeviceKind(c.B))
+	case RemoveDevice:
+		e.rack.removeDevice(int(c.A))
+	case Connect:
+		n, _ := quantize(c.V)
+		if e.rack.connect(c.A, c.C&0x0F, c.B, c.C>>4, ParamID(c.D), n) && ParamID(c.D) < NumParams {
+			e.rack.setBound(ParamID(c.D), e.params[c.D]) // 결속 케이블은 지금 값으로 게인 유도
+		}
+	case Disconnect:
+		e.rack.disconnect(c.A, c.C&0x0F, c.B, c.C>>4)
+	case DeviceParam:
+		// 장치 로컬 파라미터 — 아직 로컬 파라미터를 가진 종류가 없다(P5-poly에서 채운다). 무동작.
 	}
 }
 
@@ -407,17 +438,15 @@ func (e *Engine) Render(out []float32) {
 		if a := abs32(r); a > peak {
 			peak = a
 		}
-		// 파트별 피크 — 프리 FX 출력의 abs 최대(마스터 peak과 같은 자리). 드럼 항은
-		// drumKit.last(× acc × level까지 반영된 mix 기여), 베이스는 partOut.
-		if a := abs32(e.partOut[0]); a > e.levels[0] {
-			e.levels[0] = a
-		}
-		if a := abs32(e.partOut[1]); a > e.levels[1] {
-			e.levels[1] = a
-		}
-		for v := 0; v < NumDrums; v++ {
-			if a := abs32(e.drums.last[v]); a > e.levels[2+v] {
-				e.levels[2+v] = a
+		// 파트별 피크 — 파트 장치 출력 포트(프리 FX·레벨 반영)의 abs 최대(마스터 peak과
+		// 같은 자리). 파트의 장치가 랙에 없으면 0.
+		for p := 0; p < int(NumParts); p++ {
+			s := e.rack.partSlot[p]
+			if s == 0xFF {
+				continue
+			}
+			if a := abs32(e.rack.port[s][e.rack.partPort[p]]); a > e.levels[p] {
+				e.levels[p] = a
 			}
 		}
 	}
@@ -591,25 +620,46 @@ func (e *Engine) arpPeek(p int, st int, idx uint8) uint8 {
 	return 0
 }
 
-// sample — 보이스 합 → FX 체인 → 버스 리턴 합(§13.2). 베이스라인에는 드롭 컷오프
-// 부스트(옥타브), FX에는 드롭 드라이브 부스트. 베이스 출력에 채널 레벨을 곱한
-// 뒤(프리 FX — 기본 1.0은 mul32(x,1)==x 항등이라 출력 바이트 불변) partOut에 옆으로
-// 보관한다(레벨 미터 원본 — 미터는 레벨 반영값, §13.2). 파트 8개 값(레벨 반영 베이스 2 +
-// drumKit.last 6)이 센드 합의 입력이다. 합산 식 b0+b1은 원래의 두 process 결과 덧셈과
-// 같은 연산이라 호출 순서 변경 외에는 바이트에 닿지 않는다.
+// sample — 장치 그래프 한 샘플(§14.1, rack.go). 위상 순서대로 각 장치의 입력 포트를
+// 케이블 합으로 만들고(첫 케이블 대입·이후 덧셈·죽은 src 건너뜀) 종류별 process를 불러
+// 출력 포트에 쓴다. Main 장치의 두 입력이 엔진 출력이다(busClamp — dry 최대 0.98998 <
+// 0.99026이라 dry 단독에는 항등). 베이스라인에는 드롭 컷오프 부스트(옥타브), FX에는
+// 드롭 드라이브 부스트. 기본 랙에서는 옛 고정 체인(베이스 합 → FX → 리턴 합)과 연산
+// 순서가 같아 바이트가 같다(fx2_test 기본값 해시가 게이트).
 func (e *Engine) sample() (float32, float32) {
-	b0 := mul32(e.bass[0].process(e.dropEnv), e.bus.lvl[0])
-	e.partOut[0] = b0
-	b1 := mul32(e.bass[1].process(e.dropEnv), e.bus.lvl[1])
-	e.partOut[1] = b1
-	d, bd := e.drums.process(&e.noise)
-	var parts [8]float32
-	parts[0], parts[1] = b0, b1
-	for v := 0; v < NumDrums; v++ {
-		parts[2+v] = e.drums.last[v]
+	r := &e.rack
+	var in [MaxInPorts]float32
+	var outL, outR float32
+	for k := 0; k < r.nOrder; k++ {
+		s := int(r.order[k])
+		if !r.live[s] {
+			continue
+		}
+		if kindPorts[r.kind[s]][0] > 0 {
+			in = [MaxInPorts]float32{}
+			r.sumInputs(s, &in)
+		}
+		switch r.kind[s] {
+		case KindBass:
+			i := r.inst[s]
+			r.port[s][0] = mul32(e.bass[i].process(e.dropEnv), e.lvl[i])
+		case KindDrums:
+			d, bd := e.drums.process(&e.noise)
+			r.port[s][0], r.port[s][1] = d, bd
+			for v := 0; v < NumDrums; v++ {
+				r.port[s][2+v] = e.drums.last[v]
+			}
+		case KindFx:
+			r.port[s][0], r.port[s][1] = e.fx.process(in[0], in[1], in[2], e.dropEnv, in[3])
+		case KindReverb:
+			r.port[s][0], r.port[s][1] = e.rev.process(in[0])
+		case KindChorus:
+			r.port[s][0], r.port[s][1] = e.cho.process(in[0])
+		case KindMain:
+			outL, outR = busClamp(in[0]), busClamp(in[1])
+		}
 	}
-	l, r := e.fx.process(b0+b1, d, bd, e.dropEnv, e.bus.delayInput(&parts))
-	return e.bus.process(&parts, l, r)
+	return outL, outR
 }
 
 func abs32(x float32) float32 {
