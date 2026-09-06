@@ -318,6 +318,11 @@
   const keyframes = [];   // {block, bytes} — 16바마다 + 시작(bar 0)
   let lastTickMsg = null;
   let flagsAccum = 0;
+  // 파트별 레벨 누적(P3-levels — engine.Part 순 BassA BassB BD SD CH OH CP CY).
+  // levelsAccum = 프레임 사이 틱의 max 누적(tick()이 복사·리셋 — flagsAccum과 같은 수명),
+  // levelPeaks = 세션 누적 최댓값(측정·게이트용 — 소모하지 않는다).
+  const levelsAccum = new Float32Array(8);
+  const levelPeaks = new Float32Array(8);
   let lastKFBar = -1;
   let isReplaying = false;
   let firstKnobAt = null;
@@ -336,6 +341,17 @@
       stats.ticks++;
       lastTickMsg = d;
       flagsAccum |= d.flags;
+      // 파트별 레벨 max 누적. NaN은 건너뛴다(max 의미에서 0 치환과 같다). 구 워클릿은
+      // levels 필드가 없어 여기가 그냥 안 돈다 → 0 유지(입력 방어).
+      const lv = d.levels;
+      if (lv && lv.length === 8) {
+        for (let i = 0; i < 8; i++) {
+          const v = lv[i];
+          if (!Number.isFinite(v)) continue;
+          if (v > levelsAccum[i]) levelsAccum[i] = v;
+          if (v > levelPeaks[i]) levelPeaks[i] = v;
+        }
+      }
       if (d.flags & FLAG_BAR) {
         // 바 경계 — 섀도의 대기값(SelectPattern·SetKey)을 확정한다. 구 내보출이 없는
         // engine.wasm에서는 건너뛴다(입력 방어 — 폴백은 0값 읽기).
@@ -475,9 +491,12 @@
   }
 
   // tick() — Go가 프레임당 1회 읽는 스냅샷. flags는 호출 사이 누적 OR이고 읽으면 0으로 리셋.
-  // playing은 워클릿이 jd_playing()으로 실어 보낸다(0|1). 필드 없는 tick(구 워클릿)은
-  // 정지로 해석한다 — 멈춘 엔진을 재생 중으로 그리는 쪽이 더 나쁘다(입력 방어).
-  const tickOut = { started: false, block: 0, step: 0, bar: 0, flags: 0, peak: 0, ctxTime: 0, playing: false };
+  // levels도 같은 수명: 틱 사이 max 누적을 tickOut.levels(같은 Float32Array 재사용 —
+  // 프레임당 할당 0)에 복사하고 누적기를 지운다. playing은 워클릿이 jd_playing()으로
+  // 실어 보낸다(0|1). 필드 없는 tick(구 워클릿)은 정지로 해석한다 — 멈춘 엔진을 재생
+  // 중으로 그리는 쪽이 더 나쁘다(입력 방어).
+  const tickOut = { started: false, block: 0, step: 0, bar: 0, flags: 0, peak: 0, ctxTime: 0, playing: false,
+    levels: new Float32Array(8) };
   function tick() {
     if (!lastTickMsg) return tickOut;
     tickOut.started = true;
@@ -488,7 +507,9 @@
     tickOut.peak = lastTickMsg.peak;
     tickOut.ctxTime = lastTickMsg.ctxTime;
     tickOut.playing = !!lastTickMsg.playing;
+    tickOut.levels.set(levelsAccum);
     flagsAccum = 0;
+    levelsAccum.fill(0);
     return tickOut;
   }
 
@@ -879,6 +900,8 @@
       liveBlock: audio && lastTickMsg ? blockNow() : null,
       liveStep: lastTickMsg ? lastTickMsg.step : null,
       liveBar: lastTickMsg ? lastTickMsg.bar : null,
+      // 파트별 세션 누적 피크(P3-levels — measure 게이트가 읽는다. Part 순 8개).
+      levelPeaks: Array.from(levelPeaks),
       workletStats: workletStats
         ? { timerSource: workletStats.timerSource, stalls: workletStats.stalls, maxGapMs: workletStats.maxGapMs }
         : null,

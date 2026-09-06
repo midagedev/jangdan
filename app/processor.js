@@ -30,6 +30,10 @@ class JDProcessor extends AudioWorkletProcessor {
 
     // 틱 누적(4블록): flags는 OR, peak는 최댓값.
     this.tickN = 0; this.tickFlags = 0; this.tickPeak = 0;
+    // 파트별 블록 피크 누적(4블록 max — engine.Part 순 8개 = BassA BassB BD SD CH OH CP CY).
+    // jd_level이 없는 구 wasm은 틱에 필드를 싣지 않는다(호스트가 0 유지 — 입력 방어).
+    this.hasLevel = typeof w.jd_level === 'function';
+    this.levels = new Float32Array(8);
 
     // 리플레이 — 라이브 큐와 별도의 상대 블록 큐. 진행 중엔 라이브 cmd를 적용하지 않는다.
     this.replaying = false;
@@ -79,6 +83,7 @@ class JDProcessor extends AudioWorkletProcessor {
       this.qC.length = 0; this.qD.length = 0; this.qV.length = 0;
       this.qHead = 0; this.applied = 0;
       this.tickN = 0; this.tickFlags = 0; this.tickPeak = 0;
+      this.levels.fill(0);
     } else if (d.t === 'state:get') {
       const n = w.jd_state_write();
       // wasm 메모리 뷰는 얕다 — 복사해서 보낸다(구조적 복제 전에 값이 바뀔 수 있다).
@@ -184,21 +189,33 @@ class JDProcessor extends AudioWorkletProcessor {
       }
     }
 
-    // 틱 신호 누적(4블록) — flags는 jd_flags()를 블록마다 OR.
+    // 틱 신호 누적(4블록) — flags는 jd_flags()를 블록마다 OR, 파트 피크는 jd_level의 max.
     const fl = w.jd_flags();
     this.tickFlags |= fl;
     const pk = w.jd_peak();
     if (pk > this.tickPeak) this.tickPeak = pk;
+    if (this.hasLevel) {
+      const lv = this.levels;
+      for (let p = 0; p < 8; p++) {
+        const v = w.jd_level(p);
+        if (v > lv[p]) lv[p] = v;
+      }
+    }
     if (++this.tickN >= TICK_EVERY) {
       this.tickN = 0;
       // playing 0|1 — 트랜스포트 상태. 호스트는 이 값으로 Tick.Playing을 채운다(구 워클릿
-      // 호환: 필드가 없으면 호스트가 false로 해석한다).
-      this.port.postMessage({
+      // 호환: 필드가 없으면 호스트가 false로 해석한다). levels도 같은 규칙 — 구 워클릿은
+      // 필드 미탑재 → 호스트가 0을 유지한다.
+      const msg = {
         t: 'tick', block: w.jd_block(), step: w.jd_step(), bar: w.jd_bar(),
         flags: this.tickFlags, peak: this.tickPeak, ctxTime: currentTime, applied: this.applied,
         playing: typeof w.jd_playing === 'function' ? w.jd_playing() : 0,
-      });
+      };
+      // 구조적 복제가 postMessage 시점에 배열을 복사한다 — 아래 fill(0)은 이미 본 사본과 무관.
+      if (this.hasLevel) msg.levels = this.levels;
+      this.port.postMessage(msg);
       this.tickFlags = 0; this.tickPeak = 0;
+      if (this.hasLevel) this.levels.fill(0);
     }
 
     const f = this.f32;
