@@ -611,6 +611,15 @@ func (v *View) Update(ctx *core.Ctx) {
 			}
 			v.ptrs[si].seen = true
 			v.press(ctx, p, si)
+			// 한 프레임 안에서 누르고 놓은 입력(빠른 탭·합성 입력)은 두 플래그가 함께 온다.
+			// 누름만 처리하고 넘기면 다음 프레임에 그 포인터가 사라져 "놓친 릴리즈" 정리로
+			// 흘러가고, 놓기에 달린 판정(패드 탭·코드 셀·이름판·뒷면 잭 놓기)이 통째로
+			// 사라진다 — 화면에는 아무 일도 안 일어난 것으로 보인다(2026-09-06 브라우저 실측:
+			// 뒷면 잭 드래그의 연결과 이름판 탭이 이 경로로 조용히 죽었다).
+			if p.JustReleased {
+				v.release(ctx, p, si)
+				v.freePtr(si)
+			}
 		case p.JustReleased:
 			if si >= 0 {
 				v.release(ctx, p, si)

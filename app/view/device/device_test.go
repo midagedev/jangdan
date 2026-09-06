@@ -1567,3 +1567,22 @@ func TestPolyUnknownKnobName(t *testing.T) {
 		t.Fatalf("에러 문구 %q(기존 계약 \"매핑 없음\" 예상)", err.Error())
 	}
 }
+
+// TestSameFramePressRelease — 한 프레임 안의 누름+놓기(빠른 탭·합성 입력)도 놓기 판정을
+// 받는다. 2026-09-06 브라우저 실측에서 발견: Playwright의 즉시 클릭이 두 플래그를 한
+// 프레임에 실어 보내면 누름만 처리되고, 다음 프레임의 "놓친 릴리즈" 정리가 포인터를
+// 조용히 버려 탭이 사라졌다(뒷면 잭 놓기·이름판 탭이 무동작). 탭으로 동작하는 컨트롤
+// 전부에 걸리는 클래스라 디스패치에서 닫는다.
+func TestSameFramePressRelease(t *testing.T) {
+	h := newHarness(t)
+	cx, cy := h.v.titlePlate.Center()
+	p := ptrPress(-1, cx, cy)
+	p.JustReleased = true // 같은 프레임에 놓임
+	h.frame(p)
+	if !h.v.BackTapped() {
+		t.Fatal("같은 프레임 누름+놓기가 탭으로 판정되지 않음")
+	}
+	if h.v.nptrs != 0 {
+		t.Fatalf("포인터 캡처 %d개 남음(0 예상 — 놓기가 정리한다)", h.v.nptrs)
+	}
+}
