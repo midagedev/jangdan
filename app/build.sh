@@ -10,7 +10,7 @@ cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" app/web/wasm_exec.js
 bash tools/build-worklet.sh
 # 큰 PNG는 wasm 밖(app/assets/assets.go Names) — 호스트가 prefetch하는 정적 경로로 복사
 rm -rf app/web/assets && mkdir -p app/web/assets/device/sprites app/web/assets/room
-cp app/assets/device/panel.png app/web/assets/device/ && cp app/assets/device/sprites/*.png app/web/assets/device/sprites/ && cp app/assets/room/*.png app/web/assets/room/
+cp app/assets/device/panel.png app/assets/device/rear.png app/web/assets/device/ && cp app/assets/device/sprites/*.png app/web/assets/device/sprites/ && cp app/assets/room/*.png app/web/assets/room/
 gzip -9 -kf app/web/app.wasm
 if command -v brotli >/dev/null 2>&1; then brotli -9 -kf app/web/app.wasm; fi
 raw=$(wc -c < app/web/app.wasm | tr -d ' '); gz=$(wc -c < app/web/app.wasm.gz | tr -d ' ')
