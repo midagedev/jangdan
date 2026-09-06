@@ -79,6 +79,8 @@
     shareBytes: null,    // 성공한 POST 본문 문자 수(Worker 한도 256KB와 같은 단위)
     shareLogChars: null, // 저장한 log 페이로드 문자 수
     shareLogHash: null,  // log 페이로드 FNV-1a(measure 왕복 검증)
+    sharePostedEntries: null, // POST 성공 시점의 로그 엔트리 수(Go shareMirrorEntries 스냅샷)
+    sharePostedDecoded: null, // 같은 시점의 디코드 엔트리 수 — 열린 페이지의 sharedEntries와 이것을 비교한다
     shareURL: null,
   };
   window.__jdStatsSet = (k, v) => { stats[k] = v; };
@@ -750,6 +752,13 @@
       stats.shareOk++;
       stats.shareBytes = body.length; // Worker 한도(본문 text.length 256KB)와 같은 단위
       stats.shareURL = url;
+      // 저장된 페이로드가 몇 엔트리였는가 — Go가 jdShareURL을 부를 때마다 덮어쓰는
+      // shareMirrorEntries/shareDecodedEntries를 **POST가 성공한 그 시점의 값으로 고정**해 둔다.
+      // 쿨다운 중 재호출은 POST 없이 캐시 URL을 돌려주지만 Go 쪽 통계는 그때의 더 긴 로그로
+      // 갱신되므로, 그 값과 열린 페이지의 디코드 수를 비교하면 저장한 적 없는 페이로드와
+      // 비교하게 된다(2026-09-06 open=FAIL의 원인 — 제품이 아니라 계측 비교 대상의 문제).
+      stats.sharePostedEntries = stats.shareMirrorEntries ?? null;
+      stats.sharePostedDecoded = stats.shareDecodedEntries ?? null;
       telemetry('share_ok', body.length);
       shareLastURL = url;
       shareCoolUntil = performance.now() + SHARE_COOLDOWN_MS;

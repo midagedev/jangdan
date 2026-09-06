@@ -380,6 +380,8 @@ try {
       posts: s.sharePosts, ok: s.shareOk, failed: s.shareFailed, bytes: s.shareBytes,
       logChars: s.shareLogChars, logHash: s.shareLogHash, mirror: s.shareMirrorEntries,
       decoded: s.shareDecodedEntries, block: s.liveBlock,
+      // POST 성공 시점의 스냅샷(host.js) — A6의 비교 대상. 구 호스트에는 없다(undefined).
+      postedEntries: s.sharePostedEntries, postedDecoded: s.sharePostedDecoded,
     };
   });
   await page.evaluate(() => { window.JD_REPORT_URL = 'report'; }); // 로컬 telemetry로 복원
@@ -461,8 +463,13 @@ try {
     }));
     openReplayCmds = after.replay;
     openCmdsDelta = after.cmds - before.cmds;
+    // A6은 "같은 페이로드의 두 디코더 일치"다 — 비교 대상은 **POST가 성공한 시점**의 Go 디코드 수
+    // (host.js sharePostedDecoded)여야 한다. shareStats.decoded는 쿨다운 재호출이 덮어쓴 더 나중의
+    // 로그라 저장한 적 없는 페이로드와 비교하게 된다(2026-09-06 open=FAIL 오보고). 구 호스트
+    // (스냅샷 없음)에서는 종전대로 decoded와 비교한다.
+    const postedDecoded = shareStats.postedDecoded ?? shareStats.decoded;
     openOk = openSharedEntries > 0 && openReplayCmds > 0 && openCmdsDelta > 0
-      && openSharedEntries === shareStats.decoded && p2Errors.length === 0;
+      && openSharedEntries === postedDecoded && p2Errors.length === 0;
   }
   await p2.close();
   // ⑥ 404 열기 방어 — 존재하지 않는 id(정규식은 통과) → open_failed + 일반 세션.
@@ -678,7 +685,9 @@ try {
     `tools=${toolsHiddenOk ? 'hidden' : 'FAIL(' + pre.toolsDisplay + ')'} api=${apiTypesOk ? 'OK' : 'FAIL'} ` +
     `share=${j.shareOk ? 'OK id=' + j.shareId + ' ' + j.shareStats.logChars + 'ch' : 'FAIL'} ` +
     `roundtrip=${j.roundtripOk ? 'OK ' + j.getBytes + 'B' : 'FAIL'} ` +
-    `open=${j.openOk ? 'OK e=' + j.openSharedEntries + ' rep=' + j.openReplayCmds : 'FAIL'} ` +
+    `open=${j.openOk ? 'OK e=' + j.openSharedEntries + ' rep=' + j.openReplayCmds
+      : 'FAIL(e=' + j.openSharedEntries + ' vs posted=' + (j.shareStats && (j.shareStats.postedDecoded ?? j.shareStats.decoded))
+        + ' rep=' + j.openReplayCmds + ' d=' + j.openCmdsDelta + ')'} ` +
     `404=${j.open404Ok ? 'OK' : 'FAIL'} cool=${j.coolOk ? 'OK' : 'FAIL'} 413=${j.failSurfacedOk ? 'OK' : 'FAIL'} ` +
     `human=${j.humanLogOk ? '+' + (j.humanAfter - j.humanBefore) : 'FAIL'} ` +
     `levels=${j.levelsOk ? 'OK' : 'FAIL'}(bd=${j.levelPeaks[2] != null ? j.levelPeaks[2].toFixed(3) : 'n/a'} bassA=${j.levelPeaks[0] != null ? j.levelPeaks[0].toFixed(3) : 'n/a'}) ` +
