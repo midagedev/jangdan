@@ -24,6 +24,15 @@ KeyError 라서 같은 규칙(보호 마스크 밖 V>150 또는 S>110 → 5×5 �
      것). 잭 이식과 같은 규칙, 같은 그림 안 부품 재사용으로 닫는다: 밝은 나사의 코어(d<=5)를
      32자리에 이식(페더 5..7). 왼쪽 나사 두 개는 섹션 띠 위에 있어 오른쪽(판면 위)과 문맥이 다르다 —
      기증자를 좌·우 클래스별로 고른다(코어는 저채도 금속색이라 띠색과 무관하다).
+  5) 잭 보어 스페큘러 클램프(비전 FIX 4, 선택 적용) — 기증자 패치의 최대채널>200 픽셀을 200 에
+     비례 축소해 25자리에 전사. 하이라이트는 죽이지 않는다(금속감 단서, 안전하한 170).
+  6) 이름판 드립 메움(비전 FIX 1) — 이식 패치의 아래 여백은 앞면 기증자의 마진 픽셀이라 8행 전부
+     같은 자리에 밝은 점(실측 51/7/5px, '크림 고드름')이 남는다. 판 rect 밑변+1 부터 패치 밑변
+     +PLATE_DRIP(10, 상한 12 — 넘으면 통풍 슬릿 첫 행 y+52 와 맞닿는다)까지 모듈 면 기준색+그레인.
+  7) 백킹 밴드 평탄화(비전 FIX 2·3) — 헤더·행간·하단 밴드를 휘도 편차 축(|d(중앙값)|>=8 비율,
+     σ<=2.5 — 게이트 ⑧ 과 같은 기준)으로 평탄화. 저대비 얼룩은 scrub(V/S 축)도 자국 메움(RGB-22
+     축)도 못 잡는다 — 채택본 헤더가 6.78%/σ4.49 인데 ⑤ 는 0.000% PASS 였다(게이트 사각).
+     하단 유령은 테두리 띠(±8)가 allowed 라 같은 이유로 보이지 않았다 — 밴드 정의가 그 띠까지 잰다.
 --selftest 는 유도 결과를 커밋된 와이어프레임 rear.png 픽셀과 대조한다: rear.py 규칙이 바뀌고 이
 파일이 따라가지 않으면 실패한다(코드·산출물 발산 검출).
 """
@@ -63,6 +72,17 @@ VAL_FLOOR = 60    # '채도 높은 얼룩'의 휘도 하한 — HSV 채도는 �
                   # 다 걸린다). 보이는 색 얼룩만 잡는다.
 G5_MAX = 0.003     # 게이트 ⑤ 자국 잔류 비율(앞면 게이트 ④ 와 같은 값)
 G7_MAX = 0.01      # 게이트 ⑦ 백킹 띠 채도 높은 픽셀 비율 상한
+
+# ——— 비전 FIX(P5-back-fix, 2026-09-06) 상수
+PLATE_DRIP = 10    # FIX 1: 이름판 밑 드립 메움 높이. 상한 12 — 그 이상은 통풍 슬릿 첫 행(y+52)·
+                   # 잭 상단과 맞닿는다(실측 여유 2px). 판 rect 밑변에서 유도(비전 좌표 아님).
+MODULE_OUTLINE_W = 4   # rear.py:67 모듈 외곽선 폭 — 하단 밴드 유도(스트로크 중심이 y1, 폭 절반만큼 안쪽)
+HDR_DEV = 8        # 게이트 ⑧·평탄화의 편차 축: 밴드 중앙 휘도 대비 |d| >= 8 (비전 FIX 2 지정)
+G8_DEV_MAX = 0.01  # 게이트 ⑧: |d|>=8 픽셀 비율 상한 1.0%
+G8_SIGMA_MAX = 2.5 # 게이트 ⑧: 밴드 휘도 σ 상한
+SIGMA_TARGET = 2.0 # 평탄화 압축 목표 σ — 그레인 생존 하한 권장 1.0 과 상한 2.5 의 사이
+BAND_GRAIN_STD, BAND_GRAIN_CLIP = 2.0, 6.0   # 밴드 메움 그레인 — clip 6 < HDR_DEV 8: 메움이 스스로 게이트 ⑧ 을 넘지 않는다
+BORE_SPEC_MAX = 200    # FIX 4: 잭 보어 스페큘러 클램프(안전하한 170 — 비례 축소라 최대채널은 정확히 200)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
@@ -138,7 +158,14 @@ def build_masks(L, geom, W, H):
         A |= disc_mask(shape, j['cx'], j['cy'], j['r'] + JR_HARD + JR_FEATHER)
     for d in L['devices']:
         x, y, w, h = d['plate']
-        A |= rect_mask(shape, x - PLATE_KEEP, y - PLATE_KEEP, x + w + PLATE_KEEP, y + h + PLATE_KEEP)
+        # 아래쪽만 비대칭 확장(비전 FIX 1): 드립 메움 밴드(y+h+1 .. y+h+PLATE_MARGIN+PLATE_DRIP)까지
+        # 보호해 scrub·자국 메움이 이 띠에 개입하지 않게 한다 — 단일 소유자는 명시적 드립 메움이다.
+        # 보호 하한은 메움 밴드 하단과 정확히 같아야 한다: 그보다 아래로 더 보호하면 scrub 이 먹던
+        # 판 밑 잡픽셀(V>150 크림 점)이 allowed 은폐로 살아남는다(2026-09-06 자기 리뷰 실측 — 이 라운드가
+        # 닫는 은폐 클래스가 자기 확장에서 재발했다). 밑 인접 행의 잡픽셀은 scrub 의 MaxFilter(5) 가
+        # 2px 스밀 들어와 median(≈면색)으로 메우지만, 그 값은 드립 메움의 기준색과 같아 보이지 않는다.
+        A |= rect_mask(shape, x - PLATE_KEEP, y - PLATE_KEEP, x + w + PLATE_KEEP,
+                       y + h + PLATE_MARGIN + PLATE_DRIP)
     for g in geom:
         x0, y0, x1, y1 = g['rect']
         for (sx, sy) in g['screws']:
@@ -291,10 +318,26 @@ def pick_donor(metrics):
         die(f'no clean jack donor (need contrast>={JACK_DARK_SEL}, offset<=4, sat_foreign=0, no clash):\n  {head}')
     return max(ok, key=lambda e: e['score'])
 
+def clamp_bore_specular(patch, hard_a):
+    """비전 FIX 4(선택 — 이 라운드 적용): 기증자 패치의 최대채널이 BORE_SPEC_MAX(200)을 넘는 픽셀을
+    200 에 맞추는 비례 축소. 색 방향 보존(하이라이트를 0 으로 죽이지 않는다 — 오목한 금속감 단서),
+    정확히 200 이하로 내려가므로 안전하한 170 은 자동 충족. 패치 하나를 고치면 25자리 전부 같아진다(게이트 ②).
+    실측(시드 1234 기증자 bassB/OUT): 하드 원반 안 최대채널>200 이 43px, 그중 255 가 3px — 다른 후보의
+    보어 스페큘러가 221 에서 잘 읽혔다는 판정 근거로 200 을 택했다."""
+    pl = conform.lum(patch)
+    pre = float(pl[hard_a].max())
+    mx = patch.max(axis=2)
+    over = mx > BORE_SPEC_MAX
+    if over.any():
+        patch[over] = patch[over] * (BORE_SPEC_MAX / mx[over])[:, None]
+    post = float(conform.lum(patch)[hard_a].max())
+    return {'clamp': BORE_SPEC_MAX, 'pre_max_lum': round(pre, 1), 'post_max_lum': round(post, 1),
+            'n_px': int(over.sum())}
+
 def transplant_jacks(out, src_u8, donor, jacks):
     """하드 원반(d<=r+8) 25자리 전사 뒤 페더(r+8..r+11) — 페더는 모든 잭의 하드 영역을 피해
     블렌드한다(세로 피치 42에서 이웃 페더가 하드에 닿는다 — 하드가 먼저고 페더가 피하면
-    25개 하드 원반이 전부 기증자 픽셀로 동일하다, 게이트 ②)."""
+    25개 하드 원반이 전부 기증자 픽셀로 동일하다, 게이트 ②). 반환값은 보어 클램프 통계."""
     R = donor['r'] + JR_HARD + JR_FEATHER
     sx, sy = donor['cx'], donor['cy']
     patch = src_u8[sy - R:sy + R + 1, sx - R:sx + R + 1].astype(np.float32)
@@ -302,6 +345,7 @@ def transplant_jacks(out, src_u8, donor, jacks):
     yy, xx = np.mgrid[0:n, 0:n]
     pd = np.sqrt((yy - R) ** 2 + (xx - R) ** 2)
     hard_a = pd <= donor['r'] + JR_HARD
+    bore = clamp_bore_specular(patch, hard_a)
     feather_a = np.clip((R - pd) / JR_FEATHER, 0, 1) * (pd > donor['r'] + JR_HARD)
     shape = out.shape[:2]
     hards = np.zeros(shape, bool)
@@ -316,6 +360,7 @@ def transplant_jacks(out, src_u8, donor, jacks):
         m = (feather_a > 0) & ~hards[y0:y0 + n, x0:x0 + n]
         a = feather_a[m][:, None]
         sub[m] = patch[m] * a + sub[m] * (1.0 - a)
+    return bore
 
 def paste_plates(out, panel_old_f, front_plates, L, plate_src):
     """이름판 8개 이식 — conform.paste_rect(여백 6·페더 3·섹션 띠 열 제외) 재사용. 앞면 판(128×23)을
@@ -349,6 +394,89 @@ def refs_and_dist(out, allowed, rects, shape):
         C[rect_mask(shape, x0, y0, x1, y1)] = ref
     dist = np.sqrt(((out - C) ** 2).sum(axis=2))
     return C, dist, refs, inmod
+
+def backing_bands(geom, H):
+    """게이트 ⑧·평탄화의 밴드(헤더·행간·하단) — 행 rect에서 유도(비전 좌표 하드코딩 금지).
+    헤더·행간은 모듈 테두리 띠(±8) 바깥만 잰다(외곽선은 구조). 하단은 테두리 창을 외곽선 폭 절반(2px)
+    만큼 위로 당긴다: 도색 실측(2026-09-06 시드 1234)에서 밑변 스트로크는 y1−3(=1987)에 있고 유령의 밝은
+    성분은 1988..1995 — ±8 그대로면 [1998,2000) 2행만 남아 유령을 못 잰다(그것이 이번 게이트 사각의
+    한 축: 유령이 테두리 띠의 allowed 에 숨었다)."""
+    ys = sorted((g['rect'][1], g['rect'][3], g['name']) for g in geom)
+    bands = []
+    if ys[0][0] - BORDER_BAND > 0:
+        bands.append(('header', 0, ys[0][0] - BORDER_BAND))
+    for i in range(len(ys) - 1):
+        a, b = ys[i][1] + BORDER_BAND, ys[i + 1][0] - BORDER_BAND
+        if b > a:
+            bands.append((f'gap_{ys[i][2]}_{ys[i + 1][2]}', a, b))
+    last = ys[-1][1]
+    half = MODULE_OUTLINE_W // 2
+    if H > last - half:
+        bands.append(('bottom', last - half, min(H, last + BORDER_BAND - half)))
+    return bands
+
+def band_stats(Ll, a, b):
+    """밴드 휘도 통계 — 게이트 ⑧ 과 평탄화가 같은 축(|d|>=8 비율, σ)으로 잰다."""
+    band = Ll[a:b]
+    med = float(np.median(band))
+    return {'med': round(med, 1), 'sigma': round(float(band.std()), 2),
+            'dev8': round(float((np.abs(band - med) >= HDR_DEV).mean()), 5)}
+
+def fill_plate_drips(out, L, C, G):
+    """비전 FIX 1: 이름판 밑 '크림 고드름' 제거. 원인 실측: 이식 패치의 아래 여백 6px 이 앞면 기증자의
+    마진 픽셀이라(8행 전부 같은 자리·같은 개수 51/7/5px — diffusion 잔류가 아니라 기증자가 싣고 온 것)
+    판 밑에 밝은 점이 남는다. 판 rect 밑변+1(ph+1, 판 자체 픽셀은 유지)부터 이식 패치 밑변+PLATE_DRIP
+    (= y+h+6+10)까지 모듈 면 기준색+그레인으로 메운다. 위 가장자리는 판 밑변에서 하드 절단(페더를 걸면
+    고드름이 반투명으로 살아남는다 — 실측 밝은 점 lum 180~250), 아래만 페더. 열은 이식과 같은 섹션 띠
+    제외 규칙(x >= rect.x+STRIPE_W+6)을 따른다."""
+    H, W = out.shape[:2]
+    res = []
+    for d in L['devices']:
+        px, py, pw, ph = d['plate']
+        excl = d['rect'][0] + STRIPE_W + 6
+        x0, x1 = max(px - PLATE_MARGIN, excl), px + pw + PLATE_MARGIN
+        y0, y1 = py + ph + 1, py + ph + PLATE_MARGIN + PLATE_DRIP
+        base = rect_mask((H, W), x0, y0, x1, y1)
+        alpha = np.zeros((H, W), np.float32)
+        alpha[base] = 1.0
+        for k in range(FILL_FEATHER):                    # 아래쪽만 램프(1/F .. 1) — 위는 하드
+            alpha[y1 - 1 - k, x0:x1] = (k + 1) / FILL_FEATHER
+        n = conform.apply_fill(out, base, alpha, C, G)
+        res.append({'for': d['name'], 'band': [x0, y0, x1, y1], 'filled_px': n})
+    return res
+
+def flatten_bands(out, geom):
+    """비전 FIX 2·3: 백킹 밴드 평탄화. 축은 게이트 ⑧ 과 같다. 각 밴드:
+      1) |d|>=8 픽셀(2px 팽창, 밴드 행 안으로 제한)을 밴드 RGB 중앙값+그레인(σ2·clip6 — 축 임계 8 을
+         스스로 넘지 않는다)+페더로 메운다(헤더 얼룩·하단 유령의 검출·제거 경로).
+      2) 그래도 σ>2.5 면 밴드 전체를 중앙값으로 압축(s = SIGMA_TARGET/σ — 중앙값은 고정점이라 헤더
+         중앙값 31±2 계약이 보존된다). 통과 밴드는 바이트 그대로."""
+    H, W = out.shape[:2]
+    Ll = conform.lum(out)
+    G8 = conform.grain_field((H, W), seed=4321, std=BAND_GRAIN_STD, clip=BAND_GRAIN_CLIP)
+    done = []
+    for (name, a, b) in backing_bands(geom, H):
+        pre = band_stats(Ll, a, b)
+        if pre['dev8'] <= G8_DEV_MAX and pre['sigma'] <= G8_SIGMA_MAX:
+            done.append({'name': name, 'rows': [a, b], 'pre': pre, 'action': 'clean', 'post': pre, 'filled_px': 0})
+            continue
+        rows = rect_mask((H, W), 0, a, W, b)
+        m = np.zeros((H, W), bool)
+        m[a:b] = np.abs(Ll[a:b] - pre['med']) >= HDR_DEV
+        dil = conform.mdilate(m, 2) & rows
+        alpha = np.maximum(conform.feather_alpha(dil, FILL_FEATHER), m.astype(np.float32))
+        med_rgb = np.median(out[a:b].reshape(-1, 3), axis=0)
+        Cb = np.zeros((H, W, 3), np.float32); Cb[:] = med_rgb
+        nfill = conform.apply_fill(out, dil, alpha, Cb, G8)
+        action = f'fill {nfill}px'
+        mid = band_stats(conform.lum(out), a, b)
+        if mid['sigma'] > G8_SIGMA_MAX:
+            s = SIGMA_TARGET / mid['sigma']
+            out[a:b] = med_rgb + (out[a:b] - med_rgb) * s
+            action += f' + compress s={s:.3f}'
+        done.append({'name': name, 'rows': [a, b], 'pre': pre, 'action': action,
+                     'post': band_stats(conform.lum(out), a, b), 'filled_px': nfill})
+    return done
 
 def front_face_allowed(Lf, W, H):
     """앞면 '판면' 마스크(노브 r+18·rect+2·LED r+10·띠 19·테두리 8 제외 — scrub.py keep 과 같은 요소).
@@ -392,7 +520,7 @@ def front_face_lum(Ll_f, Lf):
     return out
 
 def measure(arr, L, geom, panel_old, front_L, front_plates, plate_src, verbose=False):
-    """게이트 ①—⑦ 측정(--check 본체, conform 실행 시 report 에도 들어간다)."""
+    """게이트 ①—⑧ 측정(--check 본체, conform 실행 시 report 에도 들어간다)."""
     H, W = arr.shape[:2]
     shape = (H, W)
     allowed = build_masks(L, geom, W, H)
@@ -473,6 +601,18 @@ def measure(arr, L, geom, panel_old, front_L, front_plates, plate_src, verbose=F
         bands.append({'rows': [a, b], 'hi_sat_ratio': round(frac, 5), 'pass': bool(frac <= G7_MAX)})
     g['g7_backing'] = {'bands': bands, 'pass': bool(all(b['pass'] for b in bands))}
 
+    # ⑧ 백킹 밴드 평탄(비전 FIX 2 축) — 헤더·행간·하단에서 |d(중앙값)|>=8 비율·σ. ⑤ 의 RGB-22 축이
+    #    저대비 얼룩을 못 잡은 사각을 닫는다: 채택본 헤더가 6.78%/σ4.49 인데 ⑤ 는 0.000% PASS 였다.
+    #    (⑤ 의 영역은 이미 전체 화면이다 — marks/(W·H). 사각은 영역이 아니라 축에 있었다.)
+    b8 = []
+    for (nm, a, b) in backing_bands(geom, H):
+        st = band_stats(Ll, a, b)
+        st['name'] = nm; st['rows'] = [a, b]
+        st['pass'] = bool(st['dev8'] <= G8_DEV_MAX and st['sigma'] <= G8_SIGMA_MAX)
+        b8.append(st)
+    g['g8_bands'] = {'bands': b8, 'dev8_max': G8_DEV_MAX, 'sigma_max': G8_SIGMA_MAX,
+                     'pass': bool(all(x['pass'] for x in b8))}
+
     # ——— 보고 전용 수치: 행 면 휘도 vs 앞면 같은 모듈(목표 |차| <= 15), 섹션 띠 RGB 중앙값
     extra = {'face_lum': [], 'stripes': []}
     flum = front_face_lum(conform.lum(panel_old.astype(np.float32)), front_L)
@@ -491,7 +631,7 @@ def measure(arr, L, geom, panel_old, front_L, front_plates, plate_src, verbose=F
 
     g['pass'] = bool(g['g1_size']['pass'] and g['g2_jack_discs']['pass'] and g['g3_jack_dark']['pass']
                      and g['g4_plates']['pass'] and g['g5_marks']['pass'] and g['g6_screws']['pass']
-                     and g['g7_backing']['pass'])
+                     and g['g7_backing']['pass'] and g['g8_bands']['pass'])
     if verbose:
         print(f'rear-conform: check gates on {W}x{H}, jacks {len(jacks)}, rows {len(geom)}')
         print(f"  g1  size {W}x{H} == 720x2000 : {'PASS' if g['g1_size']['pass'] else 'FAIL'}")
@@ -509,6 +649,9 @@ def measure(arr, L, geom, panel_old, front_L, front_plates, plate_src, verbose=F
                   f": {'PASS' if r['pass'] else 'FAIL'}")
         for b in g['g7_backing']['bands']:
             print(f"  g7  backing rows {b['rows']} hi-sat {b['hi_sat_ratio']*100:.3f}% (<= {G7_MAX*100:.0f}%) : {'PASS' if b['pass'] else 'FAIL'}")
+        for x in g['g8_bands']['bands']:
+            print(f"  g8  band {x['name']:24s} rows {x['rows']} med {x['med']} sigma {x['sigma']:.2f} (<= {G8_SIGMA_MAX}) "
+                  f"dev8 {x['dev8']*100:.2f}% (<= {G8_DEV_MAX*100:.1f}%) : {'PASS' if x['pass'] else 'FAIL'}")
         for e in extra['face_lum']:
             flag = '' if abs(e['diff']) <= 15 else '  (report-only: |diff| > 15)'
             print(f"  ..  face lum {e['name']:8s} rear {e['rear']} vs front {e['front']} ({e['front_of']}) diff {e['diff']:+.1f}{flag}")
@@ -586,7 +729,7 @@ def main():
     report = {'inputs': {'painted': painted_path, 'rear': rear_path, 'panel': panel_path, 'out': out_path,
                          'size': [W, H], 'plate_src': a.plate_src},
               'derived': {'screws_per_row': 4, 'vents': {g['name']: len(g['vents']) for g in geom}},
-              'scrub': {}, 'donor': {}, 'screws': {}, 'plates': {}, 'marks': {}, 'gates': {}}
+              'scrub': {}, 'donor': {}, 'screws': {}, 'plates': {}, 'drip': [], 'marks': {}, 'bands': [], 'gates': {}}
 
     # 0) 스크럽 — scrub.py 규칙의 뒷면 판(레이아웃+나사+슬릿 보호)
     scrubbed, nscrub = scrub(src, allowed)
@@ -601,10 +744,11 @@ def main():
     metrics = jack_metrics(conform.lum(out), hsv_of(scrubbed), L, geom)
     donor = pick_donor(metrics)
     jacks = jacks_of(L)
-    transplant_jacks(out, scrubbed, donor, jacks)
-    report['donor'] = {'chosen': donor, 'metrics': metrics, 'transplanted': len(jacks)}
+    bore = transplant_jacks(out, scrubbed, donor, jacks)
+    report['donor'] = {'chosen': donor, 'metrics': metrics, 'transplanted': len(jacks), 'bore_clamp': bore}
     print(f"rear-conform: donor jack {donor['device']}/{donor['name']} ({donor['cx']},{donor['cy']}) "
-          f"contrast {donor['contrast']} offset {donor['offset']} -> {len(jacks)} positions")
+          f"contrast {donor['contrast']} offset {donor['offset']} -> {len(jacks)} positions, "
+          f"bore specular {bore['pre_max_lum']} -> {bore['post_max_lum']} (clamp {bore['clamp']}, {bore['n_px']} px)")
 
     # 2) 나사 이식 — 게이트 ⑥(전 행 4/4 생존)을 보호만으로는 채울 수 없는 칠해진 실측에 대한
     #    잭 이식과 같은 규칙(모듈 문서의 스펙 충돌 기록 참조). 좌·우 클래스별 기증자.
@@ -623,18 +767,31 @@ def main():
                         'count': len(L['devices'])}
     print(f"rear-conform: transplanted {len(L['devices'])} nameplates <- {a.plate_src} {srcp['rect']} ({npx} px)")
 
-    # 4) 자국 메움 — conform.py B 규칙(기준색 거리 > 22 → 팽창 5 → 기준색+그레인+페더 5)
+    # 3b) 이름판 드립 메움(비전 FIX 1) — 이식 패치가 싣고 온 아래 여백의 밝은 점을 면 기준색으로.
+    #     기준색 필드·그레인은 4) 자국 메움과 공유(드립 밴드는 허용 마스크 안이라 어느 시점에 재도 같은 값).
     rects = [gm['rect'] for gm in geom]
     C, dist, refs, inmod = refs_and_dist(out, allowed, rects, (H, W))
+    G = conform.grain_field((H, W))
+    drips = fill_plate_drips(out, L, C, G)
+    report['drip'] = drips
+    print('rear-conform: plate drip bands filled ' + ', '.join(f"{d['for']}:{d['filled_px']}" for d in drips))
+
+    # 4) 자국 메움 — conform.py B 규칙(기준색 거리 > 22 → 팽창 5 → 기준색+그레인+페더 5)
     junk = dist > T_MARK
     marks = (~allowed) & junk
     dil = conform.mdilate(marks, DILATE_MARK)
     alpha = np.maximum(conform.feather_alpha(dil, FILL_FEATHER), junk.astype(np.float32))
-    G = conform.grain_field((H, W))
     filled = conform.apply_fill(out, dil & ~allowed, alpha, C, G)
     report['marks'] = {'refs': refs, 'threshold': T_MARK, 'pre_marks_px': int(marks.sum()),
                        'pre_ratio': round(float(marks.sum()) / (W * H), 6), 'filled_px': filled}
     print(f"rear-conform: marks {int(marks.sum())} px ({report['marks']['pre_ratio']*100:.2f}%) -> filled {filled} px, refs {refs}")
+
+    # 5) 백킹 밴드 평탄화(비전 FIX 2·3) — 게이트 ⑧ 축(|d|>=8 비율·σ). 통과 밴드는 건드리지 않는다.
+    bands_done = flatten_bands(out, geom)
+    report['bands'] = bands_done
+    for bd in bands_done:
+        print(f"rear-conform: band {bd['name']:24s} rows {bd['rows']} pre σ{bd['pre']['sigma']:.2f} dev8 {bd['pre']['dev8']*100:.2f}% "
+              f"-> {bd['action']} -> post σ{bd['post']['sigma']:.2f} dev8 {bd['post']['dev8']*100:.2f}%")
 
     final = np.rint(np.clip(out, 0, 255)).astype(np.uint8)
     Image.fromarray(final).save(out_path)
