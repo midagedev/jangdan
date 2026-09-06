@@ -73,6 +73,8 @@ def knob_plate_rect(k):
     cx, cy, r = int(k['cx']), int(k['cy']), int(k['r'])
     return cx-r-PLATE_DX, cy+r+PLATE_DY0, cx+r+PLATE_DX+1, cy+r+PLATE_DY1
 # P4-rackart-b 라운드의 지정 메움(리드 스펙 표에서 유도) — --check 를 --fill 없이 부르면 이 값으로 잰다.
+# **--ymin 1280 전용** — 좌표가 전부 P4 밴드(1280..1800) 안이라 다른 ymin 에서는 band 마스크에 걸려 빈 측정(max_dist 0)
+# 이 되어 "검증됐다"고 거짓 보고한다(2026-09-06 P5-poly-art FAIL-first 실측). ymin != 1280 호출은 기본값을 쓰지 않는다.
 # 보존 원판(x,y,r): diffusion이 그린 정상 하드웨어(모듈 상단 나사)가 자국 판정에 지워졌다(비전 v3) — 허용·보호 둘 다.
 P4_RACKART_B_KEEPS = [(438,1294,7),(519,1294,7),(597,1295,7),(35,1299,7),(679,1507,5)]  # 비전 v4: 나사 4개 + 우하단 장식 홈
 P4_RACKART_B_FILLS = [(546,1434,682,1498),(462,1550,500,1592),
@@ -342,8 +344,10 @@ def old_plate_stats(panel_old, old_plates):
         border_px.append(plate_pixels(panel_old, x, y, x1, y1, False).reshape(-1,3))
     return np.median(np.concatenate(inner_px), axis=0), np.median(np.concatenate(border_px), axis=0)
 
-def measure_gates(arr, L, panel_old, hsv_old, ymin, fills, verbose, plate_src='drums', keeps=()):
-    """게이트 ①③④⑤⑥ 측정(--check 본체, conform 실행 시 report 에도 들어간다)."""
+def measure_gates(arr, L, panel_old, hsv_old, ymin, fills, verbose, plate_src='drums', keeps=(), plates='mixer'):
+    """게이트 ①③④⑤⑥ 측정(--check 본체, conform 실행 시 report 에도 들어간다).
+    plates: 게이트 ⑤가 잴 이름판 대상(--plates 와 같은 쉼표 목록 — P4 값 'mixer'가 기본). 대상 이름판이
+    밴드에 없으면 ⑤는 공회개가 되므로, conform 으로 이식한 대상과 같은 값을 넘겨야 실측이 된다."""
     H, W = arr.shape[:2]
     band = np.zeros((H,W), bool); band[ymin:,:] = True
     allowed = build_allowed(L, W, H, ymin, keeps)
@@ -384,8 +388,9 @@ def measure_gates(arr, L, panel_old, hsv_old, ymin, fills, verbose, plate_src='d
     if srcp is None: die(f'plate src {plate_src} not found above ymin')
     sx,sy,sw,sh = srcp['rect']
     src_in = panel_old[sy+3:sy+sh-3, sx+3:sx+sw-3].astype(np.float32)
+    plate_targets = {t.strip() for t in plates.split(',') if t.strip()}
     for p in L['plates']:
-        if p.get('for') != 'mixer': continue
+        if p.get('for') not in plate_targets: continue
         x,y,w,h = p['rect']
         # 이식은 섹션 색 띠 열(host.x + sec_w + 6 미만)을 싣지 않으므로 그 열은 비교에서도 뺀다(원본과 같은 열끼리).
         host = next((q for q in L['panels'] if rect_of(q)[0] <= x < rect_of(q)[2] and rect_of(q)[1] <= y < rect_of(q)[3]), None)
@@ -396,14 +401,14 @@ def measure_gates(arr, L, panel_old, hsv_old, ymin, fills, verbose, plate_src='d
         mad = float(np.abs(dst_in - src_in_c).max()) if ok else 999.0
         std = dst_in.reshape(-1,3).std(axis=0)
         med = np.median(dst_in.reshape(-1,3), axis=0); smed = np.median(src_in_c.reshape(-1,3), axis=0)
-        g['g5_plates'].append({'for': 'mixer', 'rect': list(p['rect']), 'src': plate_src,
+        g['g5_plates'].append({'for': p['for'], 'rect': list(p['rect']), 'src': plate_src,
                                'std': [round(float(v),2) for v in std],
                                'median': [round(float(v),1) for v in med],
                                'median_src': [round(float(v),1) for v in smed],
                                'max_abs_diff': round(mad,1),
                                # 이식 사본이므로 안쪽(3px 제외)은 원본과 같아야 한다(FAIL-first: 평면 크림은 max diff ≫ 6)
                                'pass': bool(mad <= 6)})
-    a, b = lum(arr[1270:1280]).mean(), lum(arr[1280:1290]).mean()
+    a, b = lum(arr[ymin-10:ymin]).mean(), lum(arr[ymin:ymin+10]).mean()   # 시임 행은 ymin 에서 유도(하드코딩 1270/1280 은 P4 전용이었다)
     g['g6_seam'] = {'above': round(float(a),2), 'below': round(float(b),2),
                     'diff': round(float(abs(a-b)),2), 'pass': bool(abs(a-b) <= 12)}
     g['pass'] = bool((g['g1_top_unchanged'] is not False) and all(k['pass'] for k in g['g3_knobs'])
@@ -426,7 +431,7 @@ def measure_gates(arr, L, panel_old, hsv_old, ymin, fills, verbose, plate_src='d
         for f in g['g4']['fills']:
             print(f"      fill {f['rect']} max_dist {f['max_dist']} (<= {T_MARK}) : {'PASS' if f['pass'] else 'FAIL'}")
         for p in g['g5_plates']:
-            print(f"  g5  plate mixer {p['rect']} <- {p['src']} max|diff| {p['max_abs_diff']} (<= 6) std {p['std']} median {p['median']} vs {p['median_src']} "
+            print(f"  g5  plate {p['for']} {p['rect']} <- {p['src']} max|diff| {p['max_abs_diff']} (<= 6) std {p['std']} median {p['median']} vs {p['median_src']} "
                   f": {'PASS' if p['pass'] else 'FAIL'}")
         print(f"  g6  seam {g['g6_seam']['above']} vs {g['g6_seam']['below']} "
               f"(diff {g['g6_seam']['diff']} <= 12) : {'PASS' if g['g6_seam']['pass'] else 'FAIL'}")
@@ -452,12 +457,41 @@ def parse_fills(strings, W, H):
         fills.append((x0,y0,x1,y1))
     return fills
 
-def make_crops(final, panel_old, L, best, ymin, outdir):
-    """비전 라운드용 크롭(좌표만 — 이 도구는 이미지를 보지 않는다). 확대는 NEAREST(픽셀 그대로)."""
+def make_crops(final, panel_old, L, best, ymin, outdir, plates=None):
+    """비전 라운드용 크롭(좌표만 — 이 도구는 이미지를 보지 않는다). 확대는 NEAREST(픽셀 그대로).
+    P4(ymin 1280) 크롭 좌표는 그 라운드 고정이라 원본 그대로; 다른 ymin 은 밴드에서 유도한다(2026-09-06 P5-poly-art)."""
     os.makedirs(outdir, exist_ok=True)
     img = Image.fromarray(final); old = Image.fromarray(panel_old)
     def save(im, name):
         im.save(os.path.join(outdir, name)); print(f'conform: crop {name} {im.size}')
+    if ymin != 1280:
+        H, W = final.shape[:2]
+        save(img.crop((0, max(0, ymin-60), W, H)), 'strip-new.png')
+        new_knobs = [k for k in L['knobs'] if k['cy'] >= ymin]
+        sq = []
+        for r in sorted({k['r'] for k in new_knobs})[:2]:      # 반지름 클래스별: 기증자 원본 · 이식 결과
+            don = best.get(r, (0.0, None))[1]
+            if don is None: continue
+            nk = next(k for k in new_knobs if k['r'] == r)
+            for base, k in ((old, don), (img, nk)):
+                cr = k['r'] + 22
+                sq.append(base.crop((k['cx']-cr, k['cy']-cr, k['cx']+cr+1, k['cy']+cr+1)).resize(((2*cr+1)*2, (2*cr+1)*2), Image.NEAREST))
+        if len(sq) >= 2:
+            hh = max(im.size[1] for im in sq); ww = sum(im.size[0] for im in sq)
+            canvas = Image.new('RGB', (ww, hh), tuple(int(v) for v in np.median(final[ymin:].reshape(-1,3), axis=0)))
+            x = 0
+            for im in sq:
+                canvas.paste(im, (x, 0)); x += im.size[0]
+            save(canvas, 'knobcmp.png')
+        for t in (plates or '').split(','):
+            t = t.strip()
+            p = next((q for q in L['plates'] if q.get('for') == t and q['rect'][1] >= ymin), None)
+            if p is None: continue
+            x, y, w, h = p['rect']
+            x0, y0, x1, y1 = max(0, x-10), max(0, y-14), min(W, x+w+230), min(H, y+h+14)
+            save(img.crop((x0, y0, x1, y1)).resize(((x1-x0)*3, (y1-y0)*3), Image.NEAREST), f'plates_{t}.png')
+        save(img.crop((0, H-20, W, H)).resize((W*3, 20*3), Image.NEAREST), 'bottom-backing.png')
+        return
     save(img.crop((0,1180,720,1800)), 'strip-new.png')
     names = {}
     for k in L['knobs']:
@@ -498,9 +532,10 @@ def main():
         if not (0 < a.ymin < H): die(f'--ymin {a.ymin} out of range for height {H}')
         if panel_old.shape[1] != W or panel_old.shape[0] < a.ymin:
             die(f'panel.png {panel_old.shape[1]}x{panel_old.shape[0]} does not cover {W}x{a.ymin}')
-        fills = parse_fills(a.fill or [','.join(map(str,f)) for f in P4_RACKART_B_FILLS], W, H)
+        fills = parse_fills(a.fill or [','.join(map(str,f)) for f in (P4_RACKART_B_FILLS if a.ymin == 1280 else [])], W, H)
         hsv_old = np.asarray(Image.open(panel_path).convert('RGB').convert('HSV'), np.uint8)
-        g = measure_gates(arr, L, panel_old, hsv_old, a.ymin, fills, verbose=True, plate_src=a.plate_src, keeps=parse_keeps(a.keep or [",".join(map(str,k)) for k in P4_RACKART_B_KEEPS], W, H))
+        keeps = parse_keeps(a.keep or [",".join(map(str,k)) for k in (P4_RACKART_B_KEEPS if a.ymin == 1280 else [])], W, H)
+        g = measure_gates(arr, L, panel_old, hsv_old, a.ymin, fills, verbose=True, plate_src=a.plate_src, keeps=keeps, plates=a.plates)
         sys.exit(0 if g['pass'] else 1)
     if len(a.inputs) != 4: die('usage: conform.py <panel-v3.png> <layout-v3.json> <panel.png> <out.png> [--ymin N] [--fill x0,y0,x1,y1] [--plates mixer] [--report out.json] [--crops DIR]')
     src_path, layout_path, old_path, out_path = a.inputs
@@ -511,7 +546,7 @@ def main():
     if panel_old.shape[1] != W or panel_old.shape[0] < a.ymin:
         die(f'panel.png {panel_old.shape[1]}x{panel_old.shape[0]} does not cover {W}x{a.ymin}')
     fills = parse_fills(a.fill, W, H)
-    keeps = parse_keeps(a.keep or [','.join(map(str,k)) for k in P4_RACKART_B_KEEPS], W, H)
+    keeps = parse_keeps(a.keep or [','.join(map(str,k)) for k in (P4_RACKART_B_KEEPS if a.ymin == 1280 else [])], W, H)
     hsv_old = np.asarray(Image.open(old_path).convert('RGB').convert('HSV'), np.uint8)
     band = np.zeros((H,W), bool); band[a.ymin:,:] = True
     out = src.astype(np.float32)
@@ -611,9 +646,9 @@ def main():
     final = np.concatenate([src[:a.ymin], np.rint(np.clip(out[a.ymin:], 0, 255)).astype(np.uint8)])
     assert np.array_equal(final[:a.ymin], src[:a.ymin]), 'top rows changed — refusing to save'
     Image.fromarray(final).save(out_path)
-    report['gates'] = measure_gates(final, L, panel_old, hsv_old, a.ymin, fills, verbose=False, plate_src=a.plate_src, keeps=keeps)
+    report['gates'] = measure_gates(final, L, panel_old, hsv_old, a.ymin, fills, verbose=False, plate_src=a.plate_src, keeps=keeps, plates=a.plates)
     if a.report: json.dump(report, open(a.report,'w'), indent=1); print(f'conform: report {a.report}')
-    if a.crops: make_crops(final, panel_old, L, best, a.ymin, a.crops)
+    if a.crops: make_crops(final, panel_old, L, best, a.ymin, a.crops, a.plates)
     print(f'conform: wrote {out_path} ({W}x{H})')
 
 if __name__ == '__main__':
