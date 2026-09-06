@@ -190,9 +190,14 @@ type View struct {
 	nptrs  int
 	disp   [2]bassDisp
 	bottom bottomDisp
+	meters meters // 라인 VU 밸리스틱(P3-meters) — 파트 8 + 마스터
 
 	// 재구성 카운터 — 표시창 캐시 계약의 테스트 근거.
 	rebuilds int
+
+	// 미터 그리기 결정 수(VU 세그먼트 + 패드 LED 점) — Update에서 리셋. 구 호스트(Levels 전부 0)
+	// 소거 단언의 테스트 근거(room 뷰 draws 관례 준용).
+	meterDraws int
 
 	// 한 프레임 유효 플래그
 	back, drop bool
@@ -204,6 +209,7 @@ type View struct {
 	spriteImg  []*ebiten.Image // 반지름 클래스 오름차순
 	spriteCls  []float64
 	ledImg     [3]*ebiten.Image // on/mid/off
+	padLEDImg  *ebiten.Image    // 패드 라인 LED 점 r4(P3-meters) — newView(테스트)에서는 nil
 	ledR       float64
 	white1     *ebiten.Image
 	black1     *ebiten.Image
@@ -276,6 +282,7 @@ func New(ctx *core.Ctx) (*View, error) {
 	v.ledImg[0] = ebiten.NewImageFromImage(ledCircle(maxR, colLEDOn))
 	v.ledImg[1] = ebiten.NewImageFromImage(ledCircle(maxR, colLEDMid))
 	v.ledImg[2] = ebiten.NewImageFromImage(ledCircle(maxR, colLEDOff))
+	v.padLEDImg = ebiten.NewImageFromImage(ledCircle(padLEDR, colLEDOn)) // 패드 라인 LED 점(P3-meters)
 	v.white1 = ebiten.NewImageFromImage(solid1x1(color.NRGBA{0xFF, 0xFF, 0xFF, 0xFF}))
 	v.black1 = ebiten.NewImageFromImage(solid1x1(color.NRGBA{0, 0, 0, 0xFF}))
 	v.initStrokeOpts()
@@ -453,6 +460,7 @@ func (v *View) pairLEDs() error {
 // Update — 이 프레임의 입력 처리. Cmd 송신은 여기서만 일어난다.
 func (v *View) Update(ctx *core.Ctx) {
 	v.back, v.drop, v.grabOK = false, false, false
+	v.meterDraws = 0
 	v.runSweeps(ctx)
 	for i := range ctx.Pointers {
 		p := &ctx.Pointers[i]
@@ -486,6 +494,7 @@ func (v *View) Update(ctx *core.Ctx) {
 		}
 	}
 	v.chordIdleClose(ctx.Now)
+	v.meters.update(ctx.Tick, float32(ctx.DT))
 	v.cacheChord(ctx)
 	v.cacheDisplays(ctx)
 }

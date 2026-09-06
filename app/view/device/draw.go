@@ -1,7 +1,8 @@
 // draw.go — 그리기 전부. Draw는 Cmd를 보내지 않는다.
 //
-// 프레임당 드로잉 예산: DrawImage ≤ 130회(패널 1 + 라벨 레이어 1 + 노브 29 + LED 36 +
-// 표시창 3 + 오버레이 ≤ 14 + 코드 트랙 띠 채움 ≤ 2·글리프 ≈ 24), vector 호출 1회(스코프
+// 프레임당 드로잉 예산: DrawImage ≤ 180회(패널 1 + 라벨 레이어 1 + 노브 29 + LED 36 +
+// 표시창 3 + 오버레이 ≤ 14 + 코드 트랙 띠 채움 ≤ 2·글리프 ≈ 24 + VU 세그먼트 ≤ 44 + 패드
+// LED 점 ≤ 6 — P3-meters, 레벨 0이면 미터 0), vector 호출 1회(스코프
 // 폴리라인). 정적 라벨·스텝 버튼 면 16개·이름판 밴드 패치·코드 트랙 셀 외곽선 8개(1px×4변)
 // 는 첫 프레임에 720×1280 오프스크린 한 장(labelLayer)로 합성해 매 프레임 1회 blit한다
 // (프레임당 추가 비용 0). 옵션·버퍼는 전부 재사용.
@@ -36,7 +37,7 @@ const (
 	ledOff
 )
 
-// Draw — 패널 → 라벨 → LED → 노브 → 오버레이 → 코드 트랙 띠 → 표시창 → 스코프.
+// Draw — 패널 → 라벨 → LED → 노브 → 오버레이 → 코드 트랙 띠 → 표시창 → 라인 미터 → 스코프.
 func (v *View) Draw(screen *ebiten.Image, ctx *core.Ctx) {
 	v.ensureLayers(ctx)
 	v.op.GeoM.Reset()
@@ -48,6 +49,7 @@ func (v *View) Draw(screen *ebiten.Image, ctx *core.Ctx) {
 	v.drawOverlays(screen, ctx)
 	v.drawChordTrack(screen, ctx)
 	v.drawDisplays(screen, ctx)
+	v.drawMeters(screen, ctx)
 	v.drawScope(screen, ctx)
 }
 
@@ -296,17 +298,26 @@ func (v *View) spriteFor(r float64) *ebiten.Image {
 	return v.spriteImg[best]
 }
 
-// drawOverlays — 패드 lit(120ms)·뮤트 dim(ColorScale 0.55 상당), PLAY 상시 lit(재생 중
-// 또는 제스처 전 가짜 시계), Build 페이즈 중 DROP 펄스. 반투명 사각 1×1 텍스처 확대
-// (옵션 재사용, 할당 0). RESUME lit은 폐지(§12.3 — RESUME은 30초 무접촉 자동).
+// drawOverlays — 패드 lit(탭 120ms·라인 레벨 합성 max — P3-meters)·뮤트 dim(ColorScale 0.55
+// 상당), PLAY 상시 lit(재생 중 또는 제스처 전 가짜 시계), Build 페이즈 중 DROP 펄스. 반투명 사각
+// 1×1 텍스처 확대(옵션 재사용, 할당 0). RESUME lit은 폐지(§12.3 — RESUME은 30초 무접촉 자동).
 func (v *View) drawOverlays(screen *ebiten.Image, ctx *core.Ctx) {
 	for i := range v.pads {
 		p := &v.pads[i]
 		if ctx.Bridge.Muted(p.part) {
 			v.overlayRect(screen, p.rect, v.black1, 1-padMuteScale)
 		}
+		// 라인 레벨 lit 합성: α = max(탭 lit, 0.12+0.5·vu) 상한 0.62 — 레벨 0이면 탭 lit만.
+		vu := v.meters.disp[p.part] // 패드는 드럼 파트(2..7) — Part 값이 Levels 인덱스
+		tapA := float32(0)
 		if ctx.Now < p.litUntil {
-			v.overlayRect(screen, p.rect, v.white1, overlayLitA)
+			tapA = overlayLitA
+		}
+		if a := padLitAlpha(tapA, vu); a > 0 {
+			v.overlayRect(screen, p.rect, v.white1, a)
+		}
+		if vu > 0 {
+			v.drawPadLED(screen, p.rect, vu)
 		}
 	}
 	if v.fxPlay >= 0 && transportLit(ctx.Tick) {
@@ -369,6 +380,7 @@ func (v *View) overlayRect(screen *ebiten.Image, r core.Rect, tex *ebiten.Image,
 // drawDisplays — 표시창 3개. 문자열이 변화했을 때만 오프스크린에 다시 찍는다.
 // 베이스라인 2개는 페인팅 잔글자가 창 안에 남아 있어(패널 실측: 창 상단 ~10px에 녹색 잔흔)
 // 창색(colDispWin)을 불투명하게 깔고 그 위에 앱 폰트 텍스트만 올린다(2차 비전 처방).
+// 라인 미터 VU 띠는 이 캐시 밖(drawMeters) — 문자열과 무관하게 매 프레임 화면에 직접.
 func (v *View) drawDisplays(screen *ebiten.Image, ctx *core.Ctx) {
 	if ctx.Font == nil {
 		return
@@ -399,8 +411,14 @@ func (v *View) blitDisplay(screen *ebiten.Image, ctx *core.Ctx, slot int, r core
 			// 캔버스 밖에 놓여 아무 것도 안 그려진다(하단 표시창 미표시의 원인). 로컬 중심.
 			// 텍스트 폭은 rect−pad 안으로 축소(2차 비전 처방 — 창 밖 넘침 방지).
 			// 하단 표시창은 botDispPad(8)로 더 좁게 — "Am 120 B3 BUILD"가 창에 맞는다(§12.3).
+			// 세로는 중앙에서 위로 — 라인 미터 띠(베이스 4px·하단 3px)와 겹치지 않게(P3-meters).
+			// slot별 오프셋: 공용 경로라 같이 올리면 하단(띠 3px)이 과하게 뜬다.
+			dy := -vuTextDy
+			if slot == 2 {
+				dy = -vuTextDyBot
+			}
 			sc := labelScale(ctx.Font, *text, scale, r[2]-pad)
-			ctx.Font.Draw(img, *text, r[2]/2, r[3]/2, sc, colLCD, core.AlignCenter)
+			ctx.Font.Draw(img, *text, r[2]/2, r[3]/2+dy, sc, colLCD, core.AlignCenter)
 		}
 		*dirty = false
 	}

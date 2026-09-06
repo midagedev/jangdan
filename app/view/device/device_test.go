@@ -25,14 +25,26 @@
 //	                                        |   TestChordLabels/TestDisplayCache의 재구성 카운터
 //	화성 API 구 브리지 호환(패닉 래치)        | TestHarmonyGuard: Chord 패닉 브리지에서 무크래시·래치·기본값,
 //	                                        |   이후 Chord 실호출 없음(카운터 1 고정)
+//	라인 VU 매핑 −36..0dB→0..1(방어 포함)     | TestVuOf: 0·0.0158·음수·NaN→0, 0.1→0.444, 0.5→0.833, 1·2·100→1
+//	밸리스틱 어택 즉시·릴리스 4/s             | TestVuBallistics: dt 0.1에서 1→0.6·하한 0 스냅, Update 배선
+//	                                        |   (Levels→disp·Peak→master), 구 호스트 전환 1초 뒤 잔상 0
+//	패드 lit α = max(탭, 0.12+0.5vu) 상한 0.62 | TestPadLitAlpha: (0.18,0.5)→0.37, 레벨 0이면 탭 유지, 상한 0.62
+//	세그먼트 수 round(vu×N)·구 호스트 완전 소거 | TestMeterSegments/TestMeterDarkWhenLevelsZero: 풀스케일 결정
+//	                                        |   50건(12+12+20+6) 양성 대조, Levels 전부 0이면 결정 0, 탭 lit만으로 0
 //
 // FAIL-first(구현 전 소스에서 실측, 2026-09-06):
-//   go test ./app/view/device/ -run 'TestTransport|TestDisplayCache' -count=1
-//   → --- FAIL: TestTransport — play 탭(재생 중)이 Transport가 아니라 Drop(Kind 6) 송신
-//   → --- FAIL: TestDisplayCache — 하단 표시창이 구식 "BPM 130 - BAR 0 - INTRO" 포맷
-//   (신규 테스트 6종은 구현과 동시에 도입되어 구소스에서의 적색은 위 두 간접 증거로 대신한다.)
-//   구 브리지 패닉(가드 도입 동기): 캡처 MANIFEST 로그 — jsBridge.Chord가 "property chord
-//   is not a function" 패닉으로 Go program exited → 가드 적용 후 캡처 정상 완주.
+//
+//	go test ./app/view/device/ -run 'TestTransport|TestDisplayCache' -count=1
+//	→ --- FAIL: TestTransport — play 탭(재생 중)이 Transport가 아니라 Drop(Kind 6) 송신
+//	→ --- FAIL: TestDisplayCache — 하단 표시창이 구식 "BPM 130 - BAR 0 - INTRO" 포맷
+//	(신규 테스트 6종은 구현과 동시에 도입되어 구소스에서의 적색은 위 두 간접 증거로 대신한다.)
+//	구 브리지 패닉(가드 도입 동기): 캡처 MANIFEST 로그 — jsBridge.Chord가 "property chord
+//	is not a function" 패닉으로 Go program exited → 가드 적용 후 캡처 정상 완주.
+//
+// P3-meters(2026-09-06): 라인 미터 단언 5종(TestVuOf·TestVuBallistics·TestPadLitAlpha·
+// TestMeterSegments·TestMeterDarkWhenLevelsZero)은 신규 API(vuOf·vuStep·padLitAlpha·
+// vuSegsOn·meterDraws)와 동시 도입이라 구소스에서는 정의 없음 컴파일 실패가 FAIL-first다.
+// 헤드리스 경로의 소거 단언은 그리기 결정 카운터(meterDraws — room 뷰 draws 관례)로 한다.
 package device
 
 import (
@@ -54,7 +66,7 @@ type fakeBridge struct {
 	slot   [2]uint8
 	key    int
 	chord  [engine.ChordBars][2]uint8 // [deg, flags]
-	mode   [2][2]uint8                 // [mode, dir] — 파트 A/B
+	mode   [2][2]uint8                // [mode, dir] — 파트 A/B
 	now    float64
 	tick   core.Tick
 }
@@ -809,7 +821,7 @@ type panicBridge struct {
 	chordCalls int
 }
 
-func (p *panicBridge) Chord(int) (uint8, uint8) { p.chordCalls++; panic("chord is not a function") }
+func (p *panicBridge) Chord(int) (uint8, uint8)        { p.chordCalls++; panic("chord is not a function") }
 func (p *panicBridge) Mode(engine.Part) (uint8, uint8) { panic("mode is not a function") }
 func (p *panicBridge) KeyRoot() int                    { panic("keyRoot is not a function") }
 
@@ -921,7 +933,7 @@ func TestBassModeDisplayWindow(t *testing.T) {
 
 func TestBottomDisplay(t *testing.T) {
 	h := newHarness(t)
-	h.fb.key = 9                      // A
+	h.fb.key = 9                                   // A
 	h.fb.params[engine.Tempo] = float32(1.0 / 3.0) // BPMOf = 100+60/3 = 120
 	h.fb.tick.Bar = 3
 	h.ctx.Phase = 1 // Build
