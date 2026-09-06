@@ -133,6 +133,16 @@ startedAt, events(≤400, 초과 시 오래된 것 버림), stats 요약}` ≤ 3
 `firstSoundMs, ticks, cmdsSent, logLen, keyframes, replayDone, telemetryQueued, telemetrySent`를
 더한다.
 
+### 오디오 해제 제스처 (2026-09-06 iPhone 실측 뒤)
+
+iOS Safari는 `touchstart`/`pointerdown`을 오디오 해제 제스처로 인정하지 않는다(`touchend`·`click`은 인정).
+구 host.js는 `pointerdown`에서만 `start()`를 부르고 `await audio.resume()`을 걸었는데, iOS에서 그 Promise는
+영원히 미결이라 첫 탭에서 굳고 이후 모든 탭이 `if (audio) return`으로 무시됐다(텔레메트리: first_tap·first_knob 기록,
+`audioStarted=false`, `ticks=0`). 지금은 ① pointerdown/pointerup/touchend/click/keydown 전부에서 핸들러 안 동기
+`resume()` ② `start()`는 resume을 기다리지 않고 노드를 만든다(suspended에서도 된다) ③ `statechange`로 running을
+관측해 `audio_running` 이벤트, 2초 뒤에도 아니면 `audio_stuck`(값 = resume 호출 수). 리포트 stats에 `audioState`·
+`resumeCalls`·`gestures`·`audioRunningMs`·`audioStuck`가 실린다. 게이트는 measure.mjs "호스트 검증 5b"(iOS 형태 에뮬레이션).
+
 ## 4. 로그·키프레임·리플레이
 
 - 로그: `cmd()`가 `(block=at, author, cmd)`로 push. 오디오 시작 전 cmd는 pending에 쌓아 두고

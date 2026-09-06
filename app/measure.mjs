@@ -477,6 +477,45 @@ try {
   const shareOk = shareIdOk && shareLenOk && shareNoPayload && shareStats.ok === 1;
   const roundtripOk = roundtripHashOk && roundtripLenOk;
 
+  // --- 호스트 검증 5b: iOS 제스처 정책 에뮬레이션(2026-09-06 iPhone 실측 재현 — first_tap·first_knob 기록,
+  // audioStarted=false, ticks=0). iOS Safari는 touchstart/pointerdown을 오디오 해제 제스처로 인정하지 않고
+  // 그때 부른 resume()의 Promise를 영원히 미결로 둔다. 여기서는 AudioContext를 생성 직후 suspend하고,
+  // resume()이 pointerup/click 디스패치 중에만 진짜로 통하게 패치해 그 형태를 흉내 낸다.
+  // 계약 C7 "인정되지 않는 제스처의 resume 미결이 이후 제스처를 막지 않는다" ↔ 단언:
+  //   A16 mouse.down 1.5초 뒤 audioStarted(노드 생성) true, audioState는 아직 running 아님(에뮬레이션 자체 확인)
+  //   A17 mouse.up(pointerup+click) 뒤 5초 안에 audioState 'running'·ticks>20
+  //   A18 resumeCalls ≥ 2(제스처마다 재시도)·audioStuck 0·pageerror 0
+  // FAIL-first(구 host.js, 2026-09-06): start()가 await resume()에 영구 대기 → A16 started=false, A17 ticks=0.
+  const p4 = await context.newPage();
+  const p4Errors = [];
+  p4.on('pageerror', (e) => p4Errors.push(e.message));
+  await p4.addInitScript(() => {
+    const OrigAC = window.AudioContext;
+    const origResume = OrigAC.prototype.resume;
+    let unlocked = false;
+    const arm = () => { unlocked = true; setTimeout(() => { unlocked = false; }, 0); }; // 디스패치 끝까지만 열림
+    window.addEventListener('pointerup', arm, { capture: true });
+    window.addEventListener('click', arm, { capture: true });
+    function AC(opts) { const c = new OrigAC(opts); c.suspend(); return c; } // 헤드리스 autoplay 허용 무효화
+    AC.prototype = OrigAC.prototype;
+    window.AudioContext = AC;
+    OrigAC.prototype.resume = function () { return unlocked ? origResume.call(this) : new Promise(() => {}); };
+  });
+  await p4.goto(BASE, { waitUntil: 'load', timeout: 45000 });
+  await p4.waitForFunction(() => window.__jdStats && window.__jdStats().tFirstFrame !== null, null, { timeout: 60000 });
+  await p4.mouse.move(360, 300);
+  await p4.mouse.down();
+  await p4.waitForTimeout(1500);
+  const iosDown = await p4.evaluate(() => { const s = window.__jdStats(); return { started: s.audioStarted, state: s.audioState, ticks: s.ticks, resumeCalls: s.resumeCalls }; });
+  await p4.mouse.up();
+  try {
+    await p4.waitForFunction(() => window.__jdStats().ticks > 20 && window.__jdStats().audioState === 'running', null, { timeout: 5000, polling: 100 });
+  } catch (e) { /* 아래 스냅샷이 FAIL을 말한다 */ }
+  const iosUp = await p4.evaluate(() => { const s = window.__jdStats(); return { started: s.audioStarted, state: s.audioState, ticks: s.ticks, resumeCalls: s.resumeCalls, stuck: s.audioStuck }; });
+  await p4.close();
+  const iosGestureOk = iosDown.started === true && iosDown.state !== 'running'
+    && iosUp.state === 'running' && iosUp.ticks > 20 && iosUp.resumeCalls >= 2 && iosUp.stuck === 0 && p4Errors.length === 0;
+
   // --- 호스트 검증 6: 텔레메트리가 app/results에 저장되는가(kind=telemetry). ---
   const flushStatus = await page.evaluate(() => window.jd.telemetryFlush());
   const telemetrySent = await page.evaluate(() => window.__jdStats().telemetrySent);
@@ -581,6 +620,7 @@ try {
     failSurfacedOk,
     overStatus,
     openOk,
+    iosGestureOk, iosDown, iosUp,
     openSharedEntries,
     openReplayCmds,
     openCmdsDelta,
@@ -619,6 +659,7 @@ try {
     `open=${j.openOk ? 'OK e=' + j.openSharedEntries + ' rep=' + j.openReplayCmds : 'FAIL'} ` +
     `404=${j.open404Ok ? 'OK' : 'FAIL'} cool=${j.coolOk ? 'OK' : 'FAIL'} 413=${j.failSurfacedOk ? 'OK' : 'FAIL'} ` +
     `human=${j.humanLogOk ? '+' + (j.humanAfter - j.humanBefore) : 'FAIL'} ` +
+    `iosGesture=${j.iosGestureOk ? 'OK' : 'FAIL down=' + JSON.stringify(j.iosDown) + ' up=' + JSON.stringify(j.iosUp)} ` +
     `activeHidden=${j.activeHiddenFrames} telemetry=${telemetryOk ? 'OK ' + flushStatus + ' ' + (j.hostTelemetryEvents ?? 0) + 'ev' : 'FAIL ' + flushStatus + ' file=' + (j.hostTelemetryFile ?? 'none')}`
   );
 
