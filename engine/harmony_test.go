@@ -484,7 +484,7 @@ func TestStateV3RoundTrip(t *testing.T) {
 	if n := a.WriteState(buf[:]); n != StateSize {
 		t.Fatalf("WriteState %d", n)
 	}
-	if buf[0] != 'J' || buf[1] != '4' {
+	if buf[0] != 'J' || buf[1] != '5' {
 		t.Fatalf("매직 %q%q — want J3(P4-fx2 v3)", buf[0], buf[1])
 	}
 	f := New(9)

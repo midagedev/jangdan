@@ -104,6 +104,11 @@ type rack struct {
 	// 파트 → (슬롯, 포트) — 레벨 미터·센드 원본. slot 0xFF = 그 파트의 장치가 없다.
 	partSlot [NumParts]uint8
 	partPort [NumParts]uint8
+
+	// 슬롯별 로컬 파라미터(양자화 정본)와 스텝 패턴 — 종류가 해석한다(KindPoly부터). 장치가
+	// 없는 슬롯에도 저장은 된다(장치를 놓으면 그 값으로 시작 — 순서 무관 재생).
+	devParQ [RackSlots][DevParams]uint16
+	devPat  [RackSlots][Steps]bassStep
 }
 
 // reset — 빈 랙.
@@ -458,6 +463,30 @@ func KindPorts(k DeviceKind) (in, out uint8) {
 		return 0, 0
 	}
 	return kindPorts[k][0], kindPorts[k][1]
+}
+
+// setDevParam — 슬롯 로컬 파라미터 양자화 저장. 범위 밖 무동작. 종류별 계수 유도는 Engine이 한다.
+func (r *rack) setDevParam(slot, k int, n uint16) bool {
+	if slot < 0 || slot >= RackSlots || k < 0 || k >= DevParams {
+		return false
+	}
+	if n > ParamSteps {
+		n = ParamSteps
+	}
+	r.devParQ[slot][k] = n
+	return true
+}
+
+// setDevStep — 슬롯 스텝 패턴. step&15, note 클램프, flags 마스킹(게이트·액센트만).
+func (r *rack) setDevStep(slot int, step, note, flags uint8) bool {
+	if slot < 0 || slot >= RackSlots {
+		return false
+	}
+	if note > MaxNote {
+		note = MaxNote
+	}
+	r.devPat[slot][step&(Steps-1)] = bassStep{note: note, flags: flags & (StepGate | StepAccent)}
+	return true
 }
 
 // placeDevice — ReadState용: 슬롯에 (종류, 인스턴스)를 그대로 놓는다. 범위 밖·점유·인스턴스

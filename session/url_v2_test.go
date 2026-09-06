@@ -115,6 +115,7 @@ func TestV2AllKindsFraming(t *testing.T) {
 		{Kind: engine.Connect, A: 0, B: 3, C: 0 | 1<<4, D: 0xFF, V: 0.7},
 		{Kind: engine.Disconnect, A: 0, B: 3, C: 0 | 1<<4},
 		{Kind: engine.DeviceParam, A: 9, B: 3, V: 0.25},
+		{Kind: engine.DeviceStep, A: 7, B: 12, C: 14, D: engine.StepGate | engine.StepAccent},
 	}
 	l := &Log{}
 	for i := range cmds {

@@ -329,8 +329,37 @@ func (e *Engine) Apply(c Cmd) {
 	case Disconnect:
 		e.rack.disconnect(c.A, c.C&0x0F, c.B, c.C>>4)
 	case DeviceParam:
-		// 장치 로컬 파라미터 — 아직 로컬 파라미터를 가진 종류가 없다(P5-poly에서 채운다). 무동작.
+		n, _ := quantize(c.V)
+		if e.rack.setDevParam(int(c.A), int(c.B), n) {
+			e.applyDevParam(int(c.A), int(c.B))
+		}
+	case DeviceStep:
+		e.rack.setDevStep(int(c.A), c.B, c.C, c.D)
 	}
+}
+
+// applyDevParam — 슬롯 로컬 파라미터 k의 저장값을 그 슬롯 장치의 계수로 유도한다(종류별 switch).
+// 로컬 파라미터를 해석하는 종류가 아직 없다(KindPoly가 첫 사용자 — P5-poly).
+func (e *Engine) applyDevParam(slot, k int) {
+	switch e.rack.kind[slot] {
+	}
+}
+
+// DevParamQ — 슬롯 로컬 파라미터 양자화 값(UI 표시용). 범위 밖 0.
+func (e *Engine) DevParamQ(slot, k int) uint16 {
+	if slot < 0 || slot >= RackSlots || k < 0 || k >= DevParams {
+		return 0
+	}
+	return e.rack.devParQ[slot][k]
+}
+
+// DevStepAt — 슬롯 스텝 패턴(UI 표시용). 범위 밖 0,0.
+func (e *Engine) DevStepAt(slot int, step int) (note, flags uint8) {
+	if slot < 0 || slot >= RackSlots {
+		return 0, 0
+	}
+	s := e.rack.devPat[slot][step&(Steps-1)]
+	return s.note, s.flags
 }
 
 // 조성·코드·모드·트랜스포트 읽기(UI 표시용).

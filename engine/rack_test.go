@@ -9,7 +9,7 @@
 // | 케이블 표 가득                          | TestRackConnectRules: 64개째까지 성공·65번째 거부   | 상한 검사 제거 시 인덱스 패닉 |
 // | 결속 게인 유도(derive-don't-store)       | TestRackBoundGain: RevMix 0.5 → 리턴 케이블 게인 0.4, SetParam 뒤 갱신 | boundGain ×0.8 제거 시 실패 |
 // | 재배선이 소리를 바꾼다                  | TestRackRewireAudible: 베이스 A → Fx 케이블을 끊으면 출력 변화, 다시 이으면 원래 바이트 | disconnect 무동작이면 "차이 0" 실패 |
-// | 상태 v4 왕복                            | TestRackStateRoundTrip: 사용자 장치·케이블·비결속 게인 왕복, 오염(순환·범위 밖·Main 없음) 재정규화 | placeDevice 중복 검사 제거 시 인스턴스 중복 통과 |
+// | 상태 v5 왕복                            | TestRackStateRoundTrip: 사용자 장치·케이블·비결속 게인·로컬 파라미터·장치 패턴 왕복, 오염(순환·범위 밖·Main 없음) 재정규화 | placeDevice 중복 검사 제거 시 인스턴스 중복 통과 |
 // | 무할당                                  | TestRackNoAllocs: Apply(Connect/Disconnect/AddDevice/RemoveDevice)·재배선 랙 Render 0 | 슬라이스 append로 바꾸면 실패 |
 // | 파트 장치 제거 → 레벨 0                 | TestRackLevelsAfterRemove: BassA 제거 뒤 Level(BassA)==0, 드럼 레벨은 유지 | partSlot 갱신 누락 시 옛 포트 값 잔존으로 실패 |
 package engine
@@ -251,6 +251,15 @@ func TestRackStateRoundTrip(t *testing.T) {
 	a.Apply(Cmd{Kind: Connect, A: 11, B: SlotMain, C: 0 | 0<<4, D: uint8(ChoMix)})
 	a.Apply(Cmd{Kind: Connect, A: 11, B: SlotMain, C: 1 | 1<<4, D: uint8(ChoMix)})
 	a.SetParam(ChoMix, 0.75)
+	a.Apply(Cmd{Kind: DeviceParam, A: 11, B: 2, V: 0.3})
+	a.Apply(Cmd{Kind: DeviceParam, A: 11, B: 9, V: 0.3})          // k 범위 밖 무동작
+	a.Apply(Cmd{Kind: DeviceStep, A: 11, B: 19, C: 200, D: 0xFF}) // step&15=3, note→36, flags 마스킹
+	if a.DevParamQ(11, 2) != 1229 || a.DevParamQ(11, 7) != 0 {
+		t.Fatalf("DeviceParam 저장 %d %d", a.DevParamQ(11, 2), a.DevParamQ(11, 7))
+	}
+	if n, f := a.DevStepAt(11, 3); n != MaxNote || f != StepGate|StepAccent {
+		t.Fatalf("DeviceStep 정규화 note %d flags %d", n, f)
+	}
 	var buf [StateSize]byte
 	if a.WriteState(buf[:]) != StateSize {
 		t.Fatal("WriteState 길이")
@@ -270,6 +279,9 @@ func TestRackStateRoundTrip(t *testing.T) {
 	}
 	if rb.order != ra.order || rb.live != ra.live {
 		t.Fatal("유도 상태(order/live) 불일치")
+	}
+	if rb.devParQ != ra.devParQ || rb.devPat != ra.devPat {
+		t.Fatal("로컬 파라미터·장치 패턴 왕복 불일치")
 	}
 	x, y := render(a, 100), render(b, 100)
 	for i := range x {

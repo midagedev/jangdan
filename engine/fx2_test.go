@@ -246,8 +246,8 @@ func TestFx2StateV3(t *testing.T) {
 	if n := a.WriteState(buf[:]); n != StateSize {
 		t.Fatalf("WriteState %d, want %d", n, StateSize)
 	}
-	if buf[0] != 'J' || buf[1] != '4' {
-		t.Fatalf("매직 %q%q, want J4", buf[0], buf[1])
+	if buf[0] != 'J' || buf[1] != '5' {
+		t.Fatalf("매직 %q%q, want J5", buf[0], buf[1])
 	}
 	f := New(9)
 	if !f.ReadState(buf[:]) {
@@ -258,8 +258,8 @@ func TestFx2StateV3(t *testing.T) {
 			t.Fatalf("Param %d 불일치 %d vs %d", i, a.ParamQ(ParamID(i)), f.ParamQ(ParamID(i)))
 		}
 	}
-	// v3(748바이트 'J','3')·v2는 거부 — 랙 표·새 파라미터 해석이 없다(state.go 주석).
-	for _, old := range [...][2]int{{'3', 748}, {'2', 696}} {
+	// v4·v3·v2는 거부 — 장치 패턴·랙 표·새 파라미터 해석이 없다(state.go 주석).
+	for _, old := range [...][2]int{{'4', 1424}, {'3', 748}, {'2', 696}} {
 		v := make([]byte, StateSize) // 길이를 채워도 매직으로 거부
 		v[0], v[1] = 'J', byte(old[0])
 		if f.ReadState(v) {

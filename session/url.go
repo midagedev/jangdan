@@ -176,6 +176,8 @@ func appendCmd(b []byte, c *engine.Cmd) []byte {
 	case engine.DeviceParam:
 		n := quantizeV(c.V)
 		b = append(b, c.A, c.B, byte(n), byte(n>>8))
+	case engine.DeviceStep:
+		b = append(b, c.A, c.B, c.C, c.D)
 	}
 	return b
 }
@@ -404,8 +406,14 @@ func readCmd(raw []byte, pos int, kind byte) (c engine.Cmd, qv uint16, npos int,
 		}
 		c.V = float32(q) / engine.ParamSteps
 		return c, 0, pos + 4, true
+	case engine.DeviceStep:
+		if pos+4 > len(raw) {
+			return c, 0, -1, false
+		}
+		c.A, c.B, c.C, c.D = raw[pos], raw[pos+1], raw[pos+2], raw[pos+3]
+		return c, 0, pos + 4, true
 	default:
-		// 알 수 없는 Kind(≥ NumCmdKinds — 위 switch가 계약 내 17종 전부를 커버한다):
+		// 알 수 없는 Kind(≥ NumCmdKinds — 위 switch가 계약 내 18종 전부를 커버한다):
 		// 필드 길이를 알 수 없으므로 0바이트로 간주해 건너뛴다. 이 규칙 때문에 미래
 		// 버전이 필드 있는 새 Kind를 추가하려면 길이 바이트가 필요하다.
 		return c, 0, pos, false
