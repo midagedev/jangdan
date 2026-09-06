@@ -28,7 +28,7 @@
 
   // ==== 자산 prefetch(큰 PNG는 wasm 밖) — 목록은 app/assets/assets.go의 Names와 같다 ====
   // app.wasm 다운로드와 병렬로 받는다. Go는 assets.WaitReady()로 완료를 기다린 뒤 jd.asset(name)으로 읽는다.
-  const ASSET_NAMES = ['device/panel.png', 'device/sprites/knob-r25.png', 'device/sprites/knob-r32.png', 'device/sprites/knob-r42.png', 'room/plate-night.png'];
+  const ASSET_NAMES = ['device/panel.png', 'device/rear.png', 'device/sprites/knob-r25.png', 'device/sprites/knob-r32.png', 'device/sprites/knob-r42.png', 'room/plate-night.png'];
   const assetBytes = new Map();
   let assetsState = 0; // 0 진행 중, 1 전부 성공, -1 일부 실패(있는 것만 제공)
   Promise.all(ASSET_NAMES.map((n) => fetch('assets/' + n).then((r) => { if (!r.ok) throw new Error(n + ' ' + r.status); return r.arrayBuffer(); }).then((buf) => assetBytes.set(n, new Uint8Array(buf))).catch((e) => { console.warn('jd host: 자산 실패', e); assetsState = -1; })))
@@ -79,6 +79,8 @@
     shareBytes: null,    // 성공한 POST 본문 문자 수(Worker 한도 256KB와 같은 단위)
     shareLogChars: null, // 저장한 log 페이로드 문자 수
     shareLogHash: null,  // log 페이로드 FNV-1a(measure 왕복 검증)
+    sharePostedEntries: null, // POST 성공 시점의 로그 엔트리 수(Go shareMirrorEntries 스냅샷)
+    sharePostedDecoded: null, // 같은 시점의 디코드 엔트리 수 — 열린 페이지의 sharedEntries와 이것을 비교한다
     shareURL: null,
   };
   window.__jdStatsSet = (k, v) => { stats[k] = v; };
@@ -750,6 +752,13 @@
       stats.shareOk++;
       stats.shareBytes = body.length; // Worker 한도(본문 text.length 256KB)와 같은 단위
       stats.shareURL = url;
+      // 저장된 페이로드가 몇 엔트리였는가 — Go가 jdShareURL을 부를 때마다 덮어쓰는
+      // shareMirrorEntries/shareDecodedEntries를 **POST가 성공한 그 시점의 값으로 고정**해 둔다.
+      // 쿨다운 중 재호출은 POST 없이 캐시 URL을 돌려주지만 Go 쪽 통계는 그때의 더 긴 로그로
+      // 갱신되므로, 그 값과 열린 페이지의 디코드 수를 비교하면 저장한 적 없는 페이로드와
+      // 비교하게 된다(2026-09-06 open=FAIL의 원인 — 제품이 아니라 계측 비교 대상의 문제).
+      stats.sharePostedEntries = stats.shareMirrorEntries ?? null;
+      stats.sharePostedDecoded = stats.shareDecodedEntries ?? null;
       telemetry('share_ok', body.length);
       shareLastURL = url;
       shareCoolUntil = performance.now() + SHARE_COOLDOWN_MS;
@@ -792,6 +801,13 @@
     },
     // 장치 로컬 파라미터(P5-poly-ui): 섀도 없으면 0(기본값 폴백은 Go 쪽 core.DevParamDefault가 안다).
     devParam: (slot, k) => (shadow.w && typeof shadow.w.jd_devparam === 'function' ? shadow.w.jd_devparam(slot | 0, k | 0) : -1),
+    // 랙 위상(§14.3 뒷면 케이블 뷰). rackRev가 바뀔 때만 뷰가 표를 다시 읽는다 —
+    // 섀도가 없으면 rev 0 고정이라 뷰는 "빈 랙"을 한 번 읽고 더 묻지 않는다.
+    rackRev: () => (shadow.w && typeof shadow.w.jd_rack_rev === 'function' ? shadow.w.jd_rack_rev() : 0),
+    rackKind: (slot) => (shadow.w && typeof shadow.w.jd_rack_kind === 'function' ? shadow.w.jd_rack_kind(slot | 0) : 0),
+    numCables: () => (shadow.w && typeof shadow.w.jd_rack_ncables === 'function' ? shadow.w.jd_rack_ncables() : 0),
+    cable: (i) => (shadow.w && typeof shadow.w.jd_rack_cable === 'function' ? shadow.w.jd_rack_cable(i | 0) : -1),
+    cableGain: (i) => (shadow.w && typeof shadow.w.jd_rack_gain === 'function' ? shadow.w.jd_rack_gain(i | 0) : 0),
     bassStep: (p, step) => (shadow.w ? shadow.w.jd_bass_step(p | 0, (step | 0) & 15) : 0),
     drumStep: (p, step) => (shadow.w ? shadow.w.jd_drum_step(p | 0, (step | 0) & 15) : 0),
     muted: (p) => (shadow.w ? shadow.w.jd_muted(p | 0) : 0), // 0|1 number — 2026-09-05 boolean 패닉 교훈(bridge_js intOf)
