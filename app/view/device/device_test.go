@@ -134,6 +134,10 @@ type fakeBridge struct {
 	// AddDevice/RemoveDevice/Connect/Disconnect를 그대로 적용하므로, 뒷면 뷰가 보낸
 	// 명령이 케이블 표에 어떻게 반영되는지를 테스트가 실제 규칙(순환 거부·표 가득)으로 잰다.
 	rackEng *engine.Engine
+
+	// cablesCalls — Cables 호출 수(§14.3 읽기 계약 게이트: 뒷면 뷰는 위상 리비전이
+	// 변할 때만 표를 다시 읽는다 — P5-back-view).
+	cablesCalls int
 }
 
 // rack — 지연 생성 미러 엔진(기본 랙). New(1)의 시드는 위상과 무관하다.
@@ -149,6 +153,7 @@ func (f *fakeBridge) RackRev() uint32 { return f.rack().RackRev() }
 func (f *fakeBridge) RackKind(slot int) engine.DeviceKind { return f.rack().Kind(slot) }
 
 func (f *fakeBridge) Cables(dst []core.RackCable) int {
+	f.cablesCalls++
 	e := f.rack()
 	n := e.NumCables()
 	if n > len(dst) {
@@ -758,12 +763,24 @@ func TestTransport(t *testing.T) {
 
 // — 계약↔단언: 한 프레임 플래그 —
 
+// 이름판 탭 = 놓을 때 방(2026-09-06 P5-back-view 개정 — 누르는 즉시였다). 이유: 같은
+// 이름판 누름이 길게 누르기(0.5초)로 뒷면 전환의 시작점이 되면서, "누르는 즉시 방"이면
+// 뒷면 진입 제스처가 불가능해진다. 스펙 §14.3: 탭(짧게) → 방, 길게 누르기 → 뒷면.
 func TestFrameFlags(t *testing.T) {
 	h := newHarness(t)
 	cx, cy := h.v.titlePlate.Center()
+	// 누르는 프레임만으로는 방이 아니다(길게 누르기 후보 상태).
 	h.frame(ptrPress(-1, cx, cy))
+	if h.v.BackTapped() {
+		t.Fatal("누르는 프레임에 BackTapped true(놓을 때 판정 예상)")
+	}
+	if h.v.rear {
+		t.Fatal("누르는 프레임에 뒷면 전환")
+	}
+	// 짧게 놓으면 탭 — 이 프레임에 방.
+	h.frame(ptrRel(-1, cx, cy))
 	if !h.v.BackTapped() {
-		t.Fatal("이름판 탭 프레임에 BackTapped false")
+		t.Fatal("이름판 탭 놓기 프레임에 BackTapped false")
 	}
 	h.frame()
 	if h.v.BackTapped() {

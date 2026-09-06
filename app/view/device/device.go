@@ -131,7 +131,10 @@ const (
 	pkNone ptrKind = iota
 	pkKnob
 	pkPad
-	pkScroll // 빈 판을 잡은 드래그 — 랙 스크롤(§13.3, 상태는 scroll.go가 소유)
+	pkScroll    // 빈 판을 잡은 드래그 — 랙 스크롤(§13.3, 상태는 scroll.go가 소유)
+	pkTitle     // 기기 이름판 누름(§14.3) — 짧게 놓으면 방, 길게 누르면 뒷면(상태는 back.go)
+	pkRearPlate // 뒷면 장치 이름판(§14.3) — 탭하면 앞면 복귀
+	pkJack      // 뒷면 잭 드래그(§14.3) — 케이블 늘리기·옮기기·뽑기
 )
 
 // ptrState — 포인터 ID별 캡처. 잡힌 노브는 이동 중 다른 컨트롤로 넘어가지 않는다.
@@ -223,6 +226,31 @@ type View struct {
 	meters          meters  // 라인 VU 밸리스틱(P3-meters) — 파트 8 + 마스터
 	polyTrigT       float64 // 폴리 트리거 점 최종 점화 시각(ctx.Now, −1 = 미점화 — P5-poly)
 
+	// 뒷면 케이블 뷰(§14.3, P5-back-view — 상태·입력·그리기 전부 back.go가 소유한다;
+	// scroll.go 관례: 이곳에는 필드 선언만). rearImg는 New에서만 디코드(newView 경로 nil).
+	rear       bool
+	rearL      *core.RearLayout
+	rearImg    *ebiten.Image
+	cables     [engine.RackCables]core.RackCable
+	nCables    int
+	cableRev   uint32
+	cableRevOK bool
+	jackDrag   jackDrag
+	pendConn   pendConn
+	rejSlot    int
+	rejPort    int
+	rejIn      bool
+	rejT       float64 // 순환 거부 피드백 점화 시각(−1 = 미점화 — polyTrigT 관례)
+	rearDraws  int     // 이 프레임에 그려진 케이블 수(Update에서 리셋 — meterDraws 관례)
+
+	// 뒷면 벡터 재사용 버퍼 — 스코프의 strokeOpts/drawOpts와는 별개 변수(앞면 스코프 색을
+	// 침범하지 않는다). 그룹 경로는 색 그룹 수로 스트로크를 묶는다(back.go).
+	cableGroups     [maxCableGroups]cableGroup
+	dragPath        vector.Path
+	rejPath         vector.Path
+	cableStrokeOpts vector.StrokeOptions
+	cableDrawOpts   vector.DrawPathOptions
+
 	// 재구성 카운터 — 표시창 캐시 계약의 테스트 근거.
 	rebuilds int
 
@@ -279,6 +307,12 @@ func New(ctx *core.Ctx) (*View, error) {
 	v.panel = ebiten.NewImageFromImage(img)
 	// 랙 오프스크린(레이아웃 크기 = 720×2000, v4) — 스크롤 blit의 원본 한 장. 여기서만 만든다.
 	v.rack = ebiten.NewImage(int(l.Size[0]), int(l.Size[1]))
+	// 뒷면 패널(§14.3) — 아직 와이어프레임이지만 있는 그대로 그린다(룩 판단은 아트 라운드).
+	img, _, err = image.Decode(bytes.NewReader(mustAsset("device/rear.png")))
+	if err != nil {
+		return nil, fmt.Errorf("device: 뒷면 패널 디코드: %w", err)
+	}
+	v.rearImg = ebiten.NewImageFromImage(img)
 
 	type cls struct {
 		r   float64
@@ -326,7 +360,7 @@ func New(ctx *core.Ctx) (*View, error) {
 
 // newView — 레이아웃만 파싱해 컨트롤 인덱스를 구축한다(이미지 없음 — 유닛 테스트 경로).
 func newView(l *core.DeviceLayout) (*View, error) {
-	v := &View{layout: l, selPart: engine.BassA, fxPlay: -1, fxRec: -1, harmonyOK: true, polyTrigT: -1}
+	v := &View{layout: l, selPart: engine.BassA, fxPlay: -1, fxRec: -1, harmonyOK: true, polyTrigT: -1, rejT: -1}
 	v.disp[0].knob, v.disp[1].knob = -1, -1
 	for s := 0; s < 2; s++ {
 		for j := range v.secLEDs[s] {
@@ -446,6 +480,14 @@ func newView(l *core.DeviceLayout) (*View, error) {
 	}
 	v.initChord()
 	if err := v.pairLEDs(); err != nil {
+		return nil, err
+	}
+	// 뒷면 케이블 스트로크 옵션(§14.3 수치 — back.go 소유 상수). 스코프 옵션과 별개 변수로
+	// 둔다: drawScope가 v.drawOpts.ColorScale == colLCD를 사실상 상정하므로 뒷면이 앞면
+	// 스코프 색을 침범하면 안 된다.
+	v.cableStrokeOpts = vector.StrokeOptions{Width: cableW, LineCap: vector.LineCapRound, LineJoin: vector.LineJoinRound}
+	v.cableDrawOpts = vector.DrawPathOptions{AntiAlias: true}
+	if err := v.loadRear(); err != nil {
 		return nil, err
 	}
 	return v, nil
@@ -590,6 +632,7 @@ func (v *View) Update(ctx *core.Ctx) {
 			v.ptrs[i].seen = false
 		}
 	}
+	v.rearFrame(ctx) // 뒷면(§14.3) — 관측 카운터 리셋 + 케이블 표 동기화(이 프레임 송신의 판정 포함)
 	v.chordIdleClose(ctx.Now)
 	v.meters.update(ctx.Tick, float32(ctx.DT))
 	// 폴리 트리거 점(P5-poly): FlagPoly 프레임에 점화 시각을 래치 — 감쇠 계산은 그리기 쪽
@@ -634,8 +677,11 @@ func (v *View) freePtr(i int) {
 }
 
 // dropPtr — 놓친 릴리즈 정리: 컨트롤을 놓는다(탭 아님). 스윕 중이 아니면 노브는
-// 브리지 값 추적으로 돌아간다.
+// 브리지 값 추적으로 돌아간다. 잭 드래그도 접는다(§14.3 — 판정·송신 없이).
 func (v *View) dropPtr(i int) {
+	if v.ptrs[i].kind == pkJack {
+		v.jackDrag = jackDrag{}
+	}
 	if v.ptrs[i].kind == pkKnob {
 		kn := &v.knobs[v.ptrs[i].idx]
 		kn.held = false
@@ -656,6 +702,10 @@ func (v *View) press(ctx *core.Ctx, p *core.Pointer, si int) {
 	y := p.Y + v.scrollY
 	if v.chord.open && v.chordCellAt(p.X, y) < 0 {
 		v.chord.open = false
+	}
+	if v.rear { // §14.3 — 뒷면 히트 우선순위(잭 > 장치 이름판 > 빈 판 스크롤)는 back.go가 소유.
+		v.pressRear(ctx, p, si, y)
+		return
 	}
 	if k := v.hitKnob(p.X, y); k >= 0 {
 		st.kind, st.idx = pkKnob, k
@@ -681,7 +731,9 @@ func (v *View) press(ctx *core.Ctx, p *core.Pointer, si int) {
 		return
 	}
 	if v.hasTitle && rectHit(v.titlePlate, p.X, y) {
-		v.back = true
+		// §14.3 — 누르는 즉시 방이 아니라 놓을 때 판정: 짧게 놓으면 탭(방), 길게
+		// 누르면 뒷면 전환(movePtr). 즉시 방이면 뒷면 진입 제스처가 불가능해진다.
+		st.kind = pkTitle
 		return
 	}
 	for s := 0; s < 2; s++ {
@@ -717,6 +769,14 @@ func (v *View) movePtr(ctx *core.Ctx, p *core.Pointer, si int) {
 			st.longFired = true
 			v.holdPad(ctx, st.idx)
 		}
+	case pkTitle: // §14.3 — 길게 누르기로 앞↔뒷면 전환(잡힌 케이블은 접는다).
+		if !st.longFired && ctx.Now-st.t0 >= padHoldMute {
+			st.longFired = true
+			v.rear = !v.rear
+			v.jackDrag = jackDrag{}
+		}
+	case pkJack: // §14.3 — 드래그 끝점은 화면 좌표(그릴 때 scrollY를 더한다).
+		v.jackDrag.x, v.jackDrag.y = p.X, p.Y
 	case pkScroll:
 		dy := p.Y - st.lastY
 		st.lastY = p.Y
@@ -738,6 +798,17 @@ func (v *View) release(ctx *core.Ctx, p *core.Pointer, si int) {
 		if !st.longFired && dur < padHoldMute && moved < tapMoveMax {
 			v.tapPad(ctx, st.idx)
 		}
+	case pkTitle: // §14.3 — 길게 누르기 없이 짧게·제자리에서 놓았을 때만 방.
+		if !st.longFired && dur <= tapDurMax && moved <= tapMoveMax {
+			v.back = true
+		}
+	case pkRearPlate: // §14.3 — 뒷면 장치 이름판 탭 = 앞면 복귀.
+		if dur <= tapDurMax && moved <= tapMoveMax {
+			v.rear = false
+			v.jackDrag = jackDrag{}
+		}
+	case pkJack:
+		v.releaseJack(ctx, p)
 	}
 }
 

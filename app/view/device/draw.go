@@ -48,7 +48,11 @@ func (v *View) Draw(screen *ebiten.Image, ctx *core.Ctx) {
 	if v.rack != nil {
 		dst = v.rack
 	}
-	v.drawRack(dst, ctx)
+	if v.rear { // §14.3 — 뒷면 본문은 back.go가 그린다(blit·인디케이터만 공유).
+		v.drawRearRack(dst, ctx)
+	} else {
+		v.drawRack(dst, ctx)
+	}
 	if dst == screen {
 		return
 	}
