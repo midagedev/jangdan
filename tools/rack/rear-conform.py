@@ -47,7 +47,12 @@ T_MARK = conform.T_MARK            # 22, 자국 판정 RGB 거리 임계(앞면�
 DILATE_MARK = conform.DILATE_MARK  # 5
 FILL_FEATHER = conform.FILL_FEATHER  # 5
 RECT_PAD = conform.RECT_PAD        # 2
-BORDER_BAND = conform.BORDER_BAND  # 8
+# 뒷면 테두리 여유(허용 마스크의 테두리 띠 + 게이트 ⑧ 밴드 창이 외곽선을 피해 물러나는 거리).
+# **앞면 conform.BORDER_BAND에서 빌려 쓰던 값을 떼어냈다**(2026-09-07): 앞면 상수는 "자국 판정에서
+# 봐주는 테두리 띠"라는 뜻이고, 앞면이 자국 은신처를 줄이려 8→6으로 내리자 뒷면 밴드 창이 2px씩
+# 넓어져 모듈 외곽선을 물고 들어왔다 — y<2000의 **이미 채택된** 밴드 6개가 한꺼번에 FAIL했다.
+# 값은 종전과 같은 8이라 뒷면 동작은 불변이고, 바뀐 것은 앞면 변경이 여기로 새지 않는다는 것뿐이다.
+BAND_EDGE = 8
 PLATE_MARGIN = conform.PLATE_MARGIN  # 6, 이름판 이식 여백
 
 # ——— rear.py 에서 유도한 상수(아래 식·주석의 줄번호가 원본이다). 규칙이 바뀌면 여기도 바뀐다.
@@ -89,9 +94,20 @@ ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
 FRONT_LAYOUT_DEFAULT = os.path.join(ROOT, 'app', 'assets', 'device', 'layout.json')
 
 # 뒷면 행 → 앞면 모듈(보고용 면 휘도 비교). reverb·chorus 는 fx2 의 위·아래 절반(rear.py half()).
-FRONT_HALF = {'bassA': ('basslineA', None), 'bassB': ('basslineB', None), 'drums': ('drums', None),
-              'fx': ('fx', None), 'main': ('mixer', None), 'reverb': ('fx2', 'top'),
-              'chorus': ('fx2', 'bottom'), 'poly': ('poly', None)}
+# 뒷면 행 이름 → (앞면 패널 이름, 반쪽). 열거표가 아니라 **유도**다: 이름이 같으면 같은 판이고,
+# 예외는 앞면 한 판이 뒷면 두 행이 되는 fx2(리버브·코러스)와 이름이 다른 두 쌍뿐이다.
+# (2026-09-07: 표가 장치를 열거하던 탓에 샘플러 행이 KeyError로 게이트를 통째로 죽였다 —
+# 새 장치가 올 때마다 여기를 고쳐야 하는 구조를 없앤다. 모르는 이름은 같은 이름의 앞면 판을 쓴다.)
+FRONT_EXCEPT = {'bassA': ('basslineA', None), 'bassB': ('basslineB', None), 'main': ('mixer', None),
+                'reverb': ('fx2', 'top'), 'chorus': ('fx2', 'bottom')}
+
+def front_of(rear_name, front_layout):
+    if rear_name in FRONT_EXCEPT:
+        return FRONT_EXCEPT[rear_name]
+    known = {p['name'] for p in front_layout['panels']}
+    if rear_name in known:
+        return rear_name, None
+    die(f'행 {rear_name!r}에 대응하는 앞면 패널이 없다 — 앞면 레이아웃 패널: {sorted(known)}')
 
 def die(msg):
     sys.exit('rear-conform: ' + msg)
@@ -173,8 +189,8 @@ def build_masks(L, geom, W, H):
         for (vx0, vy0, vx1, vy1) in g['vents']:
             A |= rect_mask(shape, vx0 - VENT_PAD, vy0 - VENT_PAD, vx1 + VENT_PAD, vy1 + VENT_PAD)
         A |= rect_mask(shape, x0 - 2, y0, x0 + STRIPE_W + 2, y1)      # 섹션 색 띠(rear.py:68)
-        outer = rect_mask(shape, x0 - BORDER_BAND, y0 - BORDER_BAND, x1 + BORDER_BAND, y1 + BORDER_BAND)
-        inner = rect_mask(shape, x0 + BORDER_BAND, y0 + BORDER_BAND, x1 - BORDER_BAND, y1 - BORDER_BAND)
+        outer = rect_mask(shape, x0 - BAND_EDGE, y0 - BAND_EDGE, x1 + BAND_EDGE, y1 + BAND_EDGE)
+        inner = rect_mask(shape, x0 + BAND_EDGE, y0 + BAND_EDGE, x1 - BAND_EDGE, y1 - BAND_EDGE)
         A |= outer & ~inner                                           # 모듈 테두리 띠(안팎 8px)
     return A
 
@@ -403,16 +419,16 @@ def backing_bands(geom, H):
     한 축: 유령이 테두리 띠의 allowed 에 숨었다)."""
     ys = sorted((g['rect'][1], g['rect'][3], g['name']) for g in geom)
     bands = []
-    if ys[0][0] - BORDER_BAND > 0:
-        bands.append(('header', 0, ys[0][0] - BORDER_BAND))
+    if ys[0][0] - BAND_EDGE > 0:
+        bands.append(('header', 0, ys[0][0] - BAND_EDGE))
     for i in range(len(ys) - 1):
-        a, b = ys[i][1] + BORDER_BAND, ys[i + 1][0] - BORDER_BAND
+        a, b = ys[i][1] + BAND_EDGE, ys[i + 1][0] - BAND_EDGE
         if b > a:
             bands.append((f'gap_{ys[i][2]}_{ys[i + 1][2]}', a, b))
     last = ys[-1][1]
     half = MODULE_OUTLINE_W // 2
     if H > last - half:
-        bands.append(('bottom', last - half, min(H, last + BORDER_BAND - half)))
+        bands.append(('bottom', last - half, min(H, last + BAND_EDGE - half)))
     return bands
 
 def band_stats(Ll, a, b):
@@ -495,8 +511,8 @@ def front_face_allowed(Lf, W, H):
     for p in Lf['panels']:
         x, y, x1, y1 = rect_of(p['rect'])
         A |= rect_mask(shape, x, y, x + sec_w + 1, y1)
-        outer = rect_mask(shape, x - BORDER_BAND, y - BORDER_BAND, x1 + BORDER_BAND, y1 + BORDER_BAND)
-        inner = rect_mask(shape, x + BORDER_BAND, y + BORDER_BAND, x1 - BORDER_BAND, y1 - BORDER_BAND)
+        outer = rect_mask(shape, x - BAND_EDGE, y - BAND_EDGE, x1 + BAND_EDGE, y1 + BAND_EDGE)
+        inner = rect_mask(shape, x + BAND_EDGE, y + BAND_EDGE, x1 - BAND_EDGE, y1 - BAND_EDGE)
         A |= outer & ~inner
     if 'scope' in Lf:
         x, y, x1, y1 = rect_of(Lf['scope']['rect']); A |= rect_mask(shape, x - 8, y - 8, x1 + 8, y1 + 8)
@@ -530,7 +546,10 @@ def measure(arr, L, geom, panel_old, front_L, front_plates, plate_src, verbose=F
     g = {}
 
     # ① 크기
-    g['g1_size'] = {'size': [W, H], 'expect': list(L['size']), 'pass': bool([W, H] == list(L['size']) == [720, 2000])}
+    # g1 — 그림 크기 == rear.json이 선언한 좌표계. 2026-09-07까지 [720, 2000] 리터럴이 함께
+    # 걸려 있어 랙이 길어질 때마다 게이트가 죽었다(샘플러 행 라운드에서 FAIL). 계약의 정본은
+    # rear.json이고 그 자신이 앞면 layout.json에서 유도된다 — 리터럴은 계약이 아니라 사본이었다.
+    g['g1_size'] = {'size': [W, H], 'expect': list(L['size']), 'pass': bool([W, H] == list(L['size']))}
 
     # ② 잭 r+8 원반 픽셀 동일(이식 증거)
     first = None; ident = 0
@@ -619,7 +638,7 @@ def measure(arr, L, geom, panel_old, front_L, front_plates, plate_src, verbose=F
     for gm in geom:
         x0, y0, x1, y1 = gm['rect']
         rear_face = float(np.median(Ll[(~allowed) & rect_mask(shape, x0, y0, x1, y1)]))
-        fname, half = FRONT_HALF[gm['name']]
+        fname, half = front_of(gm['name'], front_L)
         fkey = fname if half is None else ('fx2/top' if half == 'top' else 'fx2/bottom')
         extra['face_lum'].append({'name': gm['name'], 'rear': round(rear_face, 1), 'front': round(flum[fkey], 1),
                                   'front_of': fkey, 'diff': round(rear_face - flum[fkey], 1)})
@@ -634,7 +653,8 @@ def measure(arr, L, geom, panel_old, front_L, front_plates, plate_src, verbose=F
                      and g['g7_backing']['pass'] and g['g8_bands']['pass'])
     if verbose:
         print(f'rear-conform: check gates on {W}x{H}, jacks {len(jacks)}, rows {len(geom)}')
-        print(f"  g1  size {W}x{H} == 720x2000 : {'PASS' if g['g1_size']['pass'] else 'FAIL'}")
+        ew, eh = L['size']
+        print(f"  g1  size {W}x{H} == rear.json {ew}x{eh} : {'PASS' if g['g1_size']['pass'] else 'FAIL'}")
         gj = g['g2_jack_discs']
         print(f"  g2  jack r+8 discs identical {gj['identical']}/{gj['total']} : {'PASS' if gj['pass'] else 'FAIL'}")
         g3 = g['g3_jack_dark']

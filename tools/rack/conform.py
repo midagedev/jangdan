@@ -13,7 +13,7 @@
     따라왔다). 노브 아래 라벨판(레이아웃에 없다 — knob_plate_rect로 유도)은 기증자의 판을 따로 복사한다.
     섹션 이름판은 --plate-src(기본 drums) 이름판 픽셀을 여백 6px 포함해 복사한다(평면 크림은 옆 손그림
     판과 나란히 놓이면 스티커로 튀었다). 정확한 r이 없으면 가장 가까운 r을 Lanczos 스케일(stderr 경고).
-  B 미선언 자국 — layout 허용 마스크(노브 keep_r 원판·노브 라벨판·rect+2·LED r+10·모듈 테두리 안팎 8px·
+  B 미선언 자국 — layout 허용 마스크(노브 keep_r 원판·노브 라벨판·rect+2·LED r+10·모듈 테두리 바깥 8px·안쪽 2px·
     섹션 색 띠) 밖에서 기준색(모듈 면/백킹별 허용 밖 픽셀 중앙값 — 기준색 필드는 모듈 rect 전체에 깐다,
     LED 자리 메움이 백킹색 구멍으로 들어간 결함)과의 RGB 거리 > T(22)인 픽셀을 자국으로 잡아 5px 팽창 후
     기준색 평면 + 결정론 저주파 그레인(σ≈6, 클립 ±12 → 거리 ≤ 20.8 < T) + 가장자리 3px 페더로 메운다
@@ -39,7 +39,18 @@ FILL_FEATHER = 5     # 자국·지정 메움 가장자리 페더(px) — 직사�
 GRAIN_CELL = 16      # 그레인 값 노이즈 셀(px, 이중선형 보간) — 픽셀 노이즈는 lag8 자기상관 0.05로 '사포질'로 읽혔다(비전 v3; 칠해진 면은 0.56)
 RECT_PAD = 2         # plates·buttons 등 rect의 허용 여유(px) — scrub.py 와 같다
 LED_PAD = 10         # LED 원판 허용 여유(led.r + 10)
-BORDER_BAND = 8      # 모듈 테두리 띠(안팎 8px)
+BORDER_BAND = 6      # 모듈 테두리 띠의 **바깥** 여유. 외곽선 4px + 손그림 떨림 2px. 2026-09-07까지
+                     # 8px였고 그 잉여에 백킹 쪽 가짜 슬롯 2개가 숨었다(비전 FIX 3). 4px로 더 줄여도
+                     # 잡히는 자국 수가 같아(3287px 동일) 떨림 여유가 남는 6을 택했다.
+BORDER_IN = 4        # 테두리 띠의 **안쪽** 여유 = 외곽선 스트로크 폭(wire.py rounded_rectangle width=4).
+                     # 2로 줄여 봤다가 외곽선 아랫절반이 자국으로 메워졌다(판 위 6행 휘도가
+                     # [20,20,58,58,...] — 폴리 기준 [43,43,24,17,...]의 어두운 두 행이 사라졌다).
+                     # 그때 g4는 0.000% PASS였다: 평탄화가 곧 통과였던 것이라 **게이트가 초록인
+                     # 이유가 결함**이었다. 스트로크 폭보다 좁히면 안 된다.
+                     # 2026-09-07까지 안쪽도 8px였고, 그 4px 잉여가 자국의 은신처였다: 비전이 시드 1234
+                     # 판 오른쪽 아래(밑변에서 5..10px 위)의 **흰 글자열**과 판 위 잉크선 바로 아래
+                     # 전폭 광택 줄을 짚었는데 g4는 0.000% PASS였다 — 둘 다 허용 마스크 안이었다.
+                     # 같은 계급을 뒷면 게이트 ⑧이 이미 겪었다(§12.7 "유령이 테두리 띠의 allowed 에 숨었다").
 # 노브 아래 라벨판(wire.py knob(): 설계 좌표 [cx-r-2, cy+r+10, cx+r+2, cy+r+26], SY≈0.952) — layout.json에
 # 항목이 없어 허용 마스크 밖이었고, 기준색 거리 판정이 밝은 크림판을 "자국"으로 지웠다(2026-09-06 리드 실측:
 # 새 모듈 라벨판 자리 휘도 150~188 → 99). 노브 부품의 일부로 취급한다: 허용·보호 마스크에 넣고 기증자의 판을 함께 이식한다.
@@ -155,8 +166,8 @@ def build_allowed(L, W, H, ymin, keeps=()):
     for p in L['panels']:
         x,y,x1,y1 = rect_of(p)
         outer = rect_mask(shape, x-BORDER_BAND, y-BORDER_BAND, x1+BORDER_BAND, y1+BORDER_BAND)
-        inner = rect_mask(shape, x+BORDER_BAND, y+BORDER_BAND, x1-BORDER_BAND, y1-BORDER_BAND)
-        A |= outer & ~inner                                    # 모듈 테두리 띠(안팎 8px)
+        inner = rect_mask(shape, x+BORDER_IN, y+BORDER_IN, x1-BORDER_IN, y1-BORDER_IN)
+        A |= outer & ~inner                                    # 테두리 띠(바깥 8px·안쪽 2px)
         A |= rect_mask(shape, x, y, x+sec_w+1, y1)             # 섹션 색 띠(왼쪽 20·W/768 px)
     if 'scope' in L:
         x,y,x1,y1 = rect_of({'rect': L['scope']['rect']}); A |= rect_mask(shape, x-8, y-8, x1+8, y1+8)
@@ -356,7 +367,7 @@ def measure_gates(arr, L, panel_old, hsv_old, ymin, fills, verbose, plate_src='d
     new_knobs = [k for k in L['knobs'] if k['cy'] >= ymin]
     best = cleanest_by_r(L, hsv_old, ymin)
     panels_band = [p for p in L['panels'] if rect_of(p)[3] > ymin]
-    g = {'g1_top_unchanged': None, 'g3_knobs': [], 'g4': {}, 'g5_plates': [], 'g6_seam': {}}
+    g = {'g1_top_unchanged': None, 'g3_knobs': [], 'g4': {}, 'g5_plates': [], 'g6_seam': {}, 'g7_outline': []}
     if panel_old.shape[0] >= ymin:
         g['g1_top_unchanged'] = bool(np.array_equal(arr[:ymin], panel_old[:ymin]))
     for k in new_knobs:
@@ -411,8 +422,38 @@ def measure_gates(arr, L, panel_old, hsv_old, ymin, fills, verbose, plate_src='d
     a, b = lum(arr[ymin-10:ymin]).mean(), lum(arr[ymin:ymin+10]).mean()   # 시임 행은 ymin 에서 유도(하드코딩 1270/1280 은 P4 전용이었다)
     g['g6_seam'] = {'above': round(float(a),2), 'below': round(float(b),2),
                     'diff': round(float(abs(a-b)),2), 'pass': bool(abs(a-b) <= 12)}
+    # ⑦ 모듈 외곽선 생존 — 새 모듈 테두리의 **잉크량**이 이미 채택된 모듈들만큼 되는가.
+    # 왜 필요한가(2026-09-07): 자국 허용 마스크의 안쪽 여유를 외곽선 폭보다 좁히면 스트로크가
+    # 자국으로 판정돼 면 색으로 메워진다 — 그리고 그 순간 ④가 0.000% PASS가 된다(평탄화가 곧 통과).
+    # ④만으로는 "게이트가 초록인 이유가 결함"인 상태를 구분할 수 없다.
+    # 축이 개수가 아니라 **잉크량**인 이유: BORDER_IN=2 침식본도 가장 어두운 두 행은 남아서
+    # "어두운 행 ≥ 2" 같은 개수 축은 통과했다(실측 3행 → 2행). 사라진 것은 두께다.
+    # 기준은 리터럴이 아니라 **같은 그림의 채택 모듈 중앙값 × 0.7**이다 — 그림마다 잉크가 다르다.
+    Lc = lum(arr.astype(np.float32))
+    OUTLINE_WIN = 6                                     # 스트로크 4px + 손그림 떨림 2px
+
+    def ink(rect):
+        x, y, w, h = rect
+        xs = slice(x + w // 4, x + 3 * w // 4)          # 섹션 띠·모서리 나사를 피한 가운데 절반
+        face = float(np.median(Lc[y + h // 3:y + 2 * h // 3, xs]))
+        top = sum(max(0.0, face - float(np.median(Lc[y + k, xs]))) for k in range(OUTLINE_WIN))
+        bot = sum(max(0.0, face - float(np.median(Lc[y + h - 1 - k, xs]))) for k in range(OUTLINE_WIN))
+        return face, top, bot
+
+    ref_ink = [ink(p['rect']) for p in L['panels'] if p['rect'][1] + p['rect'][3] <= ymin]
+    if ref_ink:
+        need = 0.7 * float(np.median([min(t, b) for _, t, b in ref_ink]))
+        for p in L['panels']:
+            if p['rect'][1] < ymin:
+                continue
+            face, top, bot = ink(p['rect'])
+            g['g7_outline'].append({'name': p['name'], 'face': round(face, 1), 'top_ink': round(top, 1),
+                                    'bottom_ink': round(bot, 1), 'need': round(need, 1),
+                                    'pass': bool(top >= need and bot >= need)})
+
     g['pass'] = bool((g['g1_top_unchanged'] is not False) and all(k['pass'] for k in g['g3_knobs'])
-                     and g['g4']['pass'] and all(p['pass'] for p in g['g5_plates']) and g['g6_seam']['pass'])
+                     and g['g4']['pass'] and all(p['pass'] for p in g['g5_plates']) and g['g6_seam']['pass']
+                     and all(o['pass'] for o in g['g7_outline']))
     if verbose:
         print(f'conform: check gates on {W}x{H}, ymin={ymin}, new knobs {len(new_knobs)}, fills {len(fills)}')
         print(f"  g1  y<{ymin} == panel.png : {'PASS' if g['g1_top_unchanged'] else 'FAIL'}")
@@ -433,6 +474,9 @@ def measure_gates(arr, L, panel_old, hsv_old, ymin, fills, verbose, plate_src='d
         for p in g['g5_plates']:
             print(f"  g5  plate {p['for']} {p['rect']} <- {p['src']} max|diff| {p['max_abs_diff']} (<= 6) std {p['std']} median {p['median']} vs {p['median_src']} "
                   f": {'PASS' if p['pass'] else 'FAIL'}")
+        for o in g['g7_outline']:
+            print(f"  g7  outline {o['name']:8s} face {o['face']} ink top {o['top_ink']} bottom {o['bottom_ink']}"
+                  f" (need >= {o['need']} = 채택 모듈 중앙값×0.7) : {'PASS' if o['pass'] else 'FAIL'}")
         print(f"  g6  seam {g['g6_seam']['above']} vs {g['g6_seam']['below']} "
               f"(diff {g['g6_seam']['diff']} <= 12) : {'PASS' if g['g6_seam']['pass'] else 'FAIL'}")
         print(f'conform: gates {"PASS" if g["pass"] else "FAIL"}')
