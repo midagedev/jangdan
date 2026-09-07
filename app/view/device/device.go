@@ -941,6 +941,15 @@ func (v *View) BackTapped() bool { return v.back }
 // 앞면 조작 안내라 뒷면 위에 떠 있으면 틀린 안내가 된다(2026-09-06 대표컷에서 관측).
 func (v *View) Rear() bool { return v.rear }
 
+// DebugState — 브라우저에서 밖으로 보이지 않는 뷰 상태(§9 3층 "디버깅 용이성"). 호스트가
+// 계측 필드로 노출한다. 2026-09-07: 뒷면 스크롤 위치를 밖에서 알 길이 없어 브라우저 확인
+// 스크립트가 화면 좌표를 손으로 계산했고, 그 계산이 틀려 탭이 화면 밖으로 나갔다.
+// 여기에 있는 값은 "명령 한 줄로 답해져야 하는 질문"들이다: 지금 어디를 보고 있나, 얼마나
+// 내려가 있나, 팝업이 열려 있나.
+func (v *View) DebugState() (rear bool, scrollY, scrollMax int, gainPop bool) {
+	return v.rear, int(v.scrollY + 0.5), int(v.scrollMax + 0.5), v.jackDrag.pop.on
+}
+
 // JustGrabbed — 이 프레임에 사용자가 새로 잡은 노브(MANUAL 잠금용).
 func (v *View) JustGrabbed() (engine.ParamID, bool) { return v.grabID, v.grabOK }
 

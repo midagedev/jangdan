@@ -34,11 +34,26 @@ const (
 	captionDeviceSec     = 30.0 // 기기 뷰 첫 진입 후 캡션 3 상한
 )
 
+// boolInt — statSet은 숫자만 받는다(호스트 필드는 0/1). **빌드 태그 없는 자리**에 둔다:
+// share_js.go/share_desktop.go 한쪽에만 두면 다른 타깃이 깨진다(2026-09-06 nopBridge와 같은 계급 —
+// go vet ./app/...은 초록인데 wasm 빌드가 죽었다. 게이트는 tools/check-wasm.sh다).
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 type game struct {
 	ctx    core.Ctx
 	room   *room.View
 	device *device.View
 	mode   mode
+
+	// 계측 노출용 직전값(값이 바뀔 때만 statSet — 프레임마다 JS 호출 금지).
+	dbgRear    bool
+	dbgScrollY int
+	dbgGainPop bool
 
 	start      time.Time
 	last       time.Time
@@ -153,6 +168,17 @@ func (g *game) updateIntegration() {
 	// 뒷면 전환도 기기 조작이다 — 캡션 3(앞면 조작 안내)을 끄고 유휴 타이머를 되짚는다.
 	if g.mode == modeDevice && g.device.Rear() {
 		g.in.deviceTouched = true
+	}
+	// 기기 뷰 내부 상태를 계측 필드로 — 브라우저에서 "지금 어디를 보고 있나"를 한 줄로
+	// 물을 수 있어야 한다(§9 3층). 값이 바뀔 때만 보낸다(프레임마다 JS 호출 금지).
+	if g.mode == modeDevice {
+		if rear, sy, smax, pop := g.device.DebugState(); rear != g.dbgRear || sy != g.dbgScrollY || pop != g.dbgGainPop {
+			g.dbgRear, g.dbgScrollY, g.dbgGainPop = rear, sy, pop
+			statSet("devRear", boolInt(rear))
+			statSet("devScrollY", sy)
+			statSet("devScrollMax", smax)
+			statSet("devGainPop", boolInt(pop))
+		}
 	}
 	if id, ok := g.device.JustGrabbed(); ok {
 		g.in.res.Lock(id)

@@ -5,6 +5,16 @@
 // 없음 컴파일 실패가 FAIL-first다). 동작 변경 단언(TestFrameFlags 이름판 탭 = 놓을 때)
 // 는 device_test.go 쪽 적색(h.v.rear undefined)이 같은 커밋 시점의 증거다.
 //
+// P5-gain 계약↔테스트 대응(2026-09-07 라운드가 추가한 단언 — back.go 파일 주석의 계약 순서):
+//
+//	같은 잭 탭 = 랙 무동작(결속·게인·수 불변) → 7b TestRearTapKeepsBinding
+//	팝업 열림 조건(입력 탭·출력 탭·빈 입력·slop·길게 누르기) → 7c TestRearTapOpensGainPop
+//	비결속 드래그 = 같은 끝점 Connect만, 수·결속 불변 → 7d TestRearGainPopUnboundDrag
+//	결속 드래그 = SetParam만, 결속 불변·게인은 파라미터 추종 → 7e TestRearGainPopBoundDrag
+//	닫힘 3종(판 밖 탭·앞면 복귀·케이블 소실) → 7f TestRearGainPopClose
+//	화면 내 클램프(맨 아래 잭 위로·맨 위 잭 아래로) → 7g TestRearGainPopOnScreen
+//	무할당(팝업 정지·드래그 유지 프레임) → 13 TestRearUpdateNoAlloc (c)(d)
+//
 // 좌표 계약: 잭 좌표는 rear.json(v.rearL)에서 읽는다 — 테스트도 하드코딩하지 않고
 // 레이아웃에서 유도한다(픽셀 상수의 단일 소유자). 화면 좌표 = 레이아웃 y − scrollY.
 package device
@@ -236,6 +246,347 @@ func TestRearMoveDrag(t *testing.T) {
 	}
 }
 
+// 7b. 같은 잭 탭 = 랙 무동작(P5-gain 게이트 1): 결속 케이블이 꽂힌 입력 잭을 잡아 그 자리에
+// 놓으면(짧은 탭) 그 케이블의 Bind·Gain·케이블 수가 정확히 그대로여야 한다. 수정 전 결함:
+// 같은 자리 놓기도 Disconnect+Connect(Unbound, 1.0) "재연결"로 결속을 끊고 게인을 튀게
+// 했다(리드 실측 "BassB→Reverb 탭 전 gain=0.400 bind=36 → 탭 후 gain=1.000 bind=59").
+// 이 테스트의 대상 케이블은 메인 IN L의 마지막 = 코러스 L 리턴(결속 ChoMix=50, 게인
+// 0.8×기본값) — 리드 예시 쌍 BassB→Reverb는 이제 그 포트의 마지막 케이블이 아니므로(샘플러
+// 센드·드럼 센드 8개가 뒤에 붙는다) 탭으로 잡히는 결속 케이블의 대표로 이것을 잰다.
+func TestRearTapKeepsBinding(t *testing.T) {
+	h := newHarness(t)
+	enterRear(t, h)
+	j := rearJackAt(t, h.v, engine.SlotMain, 0, true)
+	h.v.scrollY = h.v.clampScroll(j.CY - 640)
+	before := h.fb.rack().NumCables()
+	bGain, bBind := cableAt(h, engine.SlotChorus, 0, engine.SlotMain, 0)
+	if bBind != uint8(engine.ChoMix) {
+		t.Fatalf("전제: 메인 IN L 마지막 케이블 결속 %d(ChoMix %d 예상)", bBind, engine.ChoMix)
+	}
+	tap(h, j.CX, j.CY-h.v.scrollY)
+	for _, r := range h.fb.cmds {
+		switch r.c.Kind {
+		case engine.Connect, engine.Disconnect, engine.SetParam:
+			t.Fatalf("같은 잭 탭에 송신 %+v(랙 무동작 예상)", r.c)
+		}
+	}
+	if after := h.fb.rack().NumCables(); after != before {
+		t.Fatalf("케이블 수 %d→%d(불변 예상)", before, after)
+	}
+	aGain, aBind := cableAt(h, engine.SlotChorus, 0, engine.SlotMain, 0)
+	if aBind != bBind || aGain != bGain {
+		t.Fatalf("탭 뒤 Bind %d→%d · Gain %v→%v(불변 예상)", bBind, aBind, bGain, aGain)
+	}
+}
+
+// cableAt — 뷰가 다시 읽은 표에서 (src,sp,dst,dp) 케이블의 (게인, 결속). 없으면 Bind에
+// 0xFF를 돌려준다(테스트 전제 확인용).
+func cableAt(h *harness, src, sp, dst, dp int) (float32, uint8) {
+	for i := 0; i < h.v.nCables; i++ {
+		c := &h.v.cables[i]
+		if int(c.Src) == src && int(c.SP) == sp && int(c.Dst) == dst && int(c.DP) == dp {
+			return c.Gain, c.Bind
+		}
+	}
+	return 0, 0xFF
+}
+
+// popTapJack — (slot, port) 입력 잭을 화면 세로 중앙에 오도록 스크롤해 탭한다. 팝업
+// 개방 여부는 호출자가 판단한다(열림·비열림 양쪽 제스처에 같은 동작으로 쓴다).
+func popTapJack(t *testing.T, h *harness, slot, port int) {
+	t.Helper()
+	j := rearJackAt(t, h.v, slot, port, true)
+	h.v.scrollY = h.v.clampScroll(j.CY - 640)
+	tap(h, j.CX, j.CY-h.v.scrollY)
+}
+
+// popScreenRect — 팝업 rect의 화면 좌표판(레이아웃 y − scrollY). 클램프 단언의 축.
+func popScreenRect(h *harness) core.Rect {
+	r := h.v.gainPopRect(h.fb)
+	return core.Rect{r[0], r[1] - h.v.scrollY, r[2], r[3]}
+}
+
+// assertNoRackCmds — 지금까지 송신에 랙·파라미터 명령이 없어야 한다(무동작 단언 공용).
+func assertNoRackCmds(t *testing.T, h *harness) {
+	t.Helper()
+	for _, r := range h.fb.cmds {
+		switch r.c.Kind {
+		case engine.Connect, engine.Disconnect, engine.SetParam:
+			t.Fatalf("무동작 예상 자리에 송신 %+v", r.c)
+		}
+	}
+}
+
+// 7c. 팝업 열림 조건(P5-gain 게이트 3): 입력 잭 탭 = 개방(대상 = 그 포트의 마지막 케이블,
+// 출처 라벨은 rear.json 이름·라벨의 조립), 출력 잭 탭 = 무동작, 빈 입력 잭 탭 = 무동작,
+// tapSlop 초과 이동 = 드래그(무동작), tapDur 초과 길게 누르기 = 무동작.
+func TestRearTapOpensGainPop(t *testing.T) {
+	h := newHarness(t)
+	enterRear(t, h)
+	// (a) 입력 잭 탭 — 메인 IN L 마지막 케이블 = 코러스 L(테스트 7b와 같은 대상).
+	popTapJack(t, h, engine.SlotMain, 0)
+	po := &h.v.jackDrag.pop
+	if !po.on {
+		t.Fatal("(a) 입력 잭 탭에 팝업 미개방")
+	}
+	if po.src != engine.SlotChorus || po.sp != 0 || po.dst != engine.SlotMain || po.dp != 0 {
+		t.Fatalf("(a) 팝업 대상 (%d,%d)->(%d,%d)(코러스 L->메인 L 예상)", po.src, po.sp, po.dst, po.dp)
+	}
+	if po.label != "CHORUS L -> MAIN L" {
+		t.Fatalf("(a) 출처 라벨 %q(\"CHORUS L -> MAIN L\" 예상 — rear.json 이름·라벨 조립)", po.label)
+	}
+	// 판 밖 탭으로 정리(닫힘 자체는 7f가 잰다) — 이하 단계의 전제.
+	tap(h, 360, 100)
+	if po.on {
+		t.Fatal("판 밖 탭에 팝업 잔존(이하 단계 전제 깨짐)")
+	}
+	// (b) 출력 잭 탭 — 케이블 늘리기로 잡혔다 같은 잭 놓기. 팝업도 송신도 없어야 한다.
+	h.v.scrollY = 0
+	h.fb.cmds = nil
+	o := rearJackAt(t, h.v, engine.SlotBassA, 0, false)
+	tap(h, o.CX, o.CY)
+	if h.v.jackDrag.pop.on {
+		t.Fatal("(b) 출력 잭 탭에 팝업 개방")
+	}
+	assertNoRackCmds(t, h)
+	// (c) 빈 입력 잭 탭 — 미리 fx SC의 유일한 케이블(드럼 SC)을 뽑아 둔다.
+	h.fb.Cmd(engine.Cmd{Kind: engine.Disconnect, A: engine.SlotDrums, B: engine.SlotFx,
+		C: 1 | 2<<4}, core.Human)
+	h.frame()
+	h.fb.cmds = nil
+	popTapJack(t, h, engine.SlotFx, 2)
+	if h.v.jackDrag.pop.on {
+		t.Fatal("(c) 빈 입력 잭 탭에 팝업 개방")
+	}
+	assertNoRackCmds(t, h)
+	// (d) tapSlop 초과 이동(10px > 6px, 잭 히트 반지름 16 안이라 같은 잭) — 탭이 아니다.
+	h.fb.cmds = nil
+	m := rearJackAt(t, h.v, engine.SlotMain, 0, true)
+	h.v.scrollY = h.v.clampScroll(m.CY - 640)
+	sy := m.CY - h.v.scrollY
+	h.frame(ptrPress(-1, m.CX, sy))
+	h.frame(ptrMove(-1, m.CX+10, sy))
+	h.frame(ptrRel(-1, m.CX+10, sy))
+	if h.v.jackDrag.pop.on {
+		t.Fatal("(d) tapSlop 초과 이동에 팝업 개방")
+	}
+	assertNoRackCmds(t, h)
+	// (e) tapDur 초과 길게 누르기(25프레임 ≈ 0.417s > 0.35s) — 제자리여도 탭이 아니다.
+	h.fb.cmds = nil
+	h.frame(ptrPress(-1, m.CX, sy))
+	h.hold(-1, m.CX, sy, 24)
+	h.frame(ptrRel(-1, m.CX, sy))
+	if h.v.jackDrag.pop.on {
+		t.Fatal("(e) 길게 눌림에 팝업 개방")
+	}
+	assertNoRackCmds(t, h)
+}
+
+// 7d. 비결속 팝업 게인 드래그(P5-gain 게이트 4): 위로 끌면 게인이 오르되 송신은 전부 같은
+// 끝점의 Connect(D=Unbound — connect가 그 자리를 갱신)뿐이고 케이블 수·결속 상태는 불변.
+// 기본 랙의 비결속 마지막 케이블은 게인이 전부 1.0이라(스펙 전제 수정 — 실측) 증감을 재려면
+// 미리 값을 깔아야 한다: 샘플러→fx DIR(직렬 입력)을 0.3으로.
+func TestRearGainPopUnboundDrag(t *testing.T) {
+	h := newHarness(t)
+	enterRear(t, h)
+	h.fb.Cmd(engine.Cmd{Kind: engine.Connect, A: engine.SlotSampler, B: engine.SlotFx,
+		C: 0 | 1<<4, D: uint8(engine.Unbound), V: 0.3}, core.Human)
+	h.frame()
+	h.fb.cmds = nil
+	before := h.fb.rack().NumCables()
+	popTapJack(t, h, engine.SlotFx, 1)
+	if !h.v.jackDrag.pop.on {
+		t.Fatal("전제: fx DIR 탭에 팝업 미개방")
+	}
+	g0, b0 := cableAt(h, engine.SlotSampler, 0, engine.SlotFx, 1)
+	if b0 != uint8(engine.Unbound) || g0 < 0.29 || g0 > 0.31 {
+		t.Fatalf("전제: DIR 케이블 게인 %v 결속 %d(≈0.3·비결속 예상)", g0, b0)
+	}
+	// 팝업판 안에서 위로 40px(4보 이동 + 놓기) — 감도 popDragRange 136px = Δ1.0.
+	r := popScreenRect(h)
+	cx, cy := r[0]+r[2]/2, r[1]+r[3]/2
+	h.frame(ptrPress(-1, cx, cy))
+	for i := 1; i <= 4; i++ {
+		h.frame(ptrMove(-1, cx, cy-10*float64(i)))
+	}
+	h.frame(ptrRel(-1, cx, cy-40))
+	cs := rackCmds(h, engine.Connect)
+	if len(cs) == 0 {
+		t.Fatal("드래그에 Connect 송신 없음")
+	}
+	for _, c := range cs {
+		if c.A != engine.SlotSampler || c.B != engine.SlotFx || c.C != 0|1<<4 ||
+			c.D != uint8(engine.Unbound) {
+			t.Fatalf("Connect %+v(샘플러→fx DIR·D=Unbound 예상 — 같은 끝점 갱신)", c)
+		}
+	}
+	if last := cs[len(cs)-1].V; last < 0.55 || last > 0.65 { // 0.3 + 40/136 ≈ 0.594
+		t.Fatalf("마지막 송신 게인 %v(≈0.594 예상)", last)
+	}
+	for _, k := range [...]engine.CmdKind{engine.SetParam, engine.Disconnect} {
+		if n := len(rackCmds(h, k)); n != 0 {
+			t.Fatalf("비결속 드래그에 %d번 종류 송신 %d건(0 예상)", k, n)
+		}
+	}
+	h.frame() // 미러 재독(놓은 프레임 뒤 확정)
+	g1, b1 := cableAt(h, engine.SlotSampler, 0, engine.SlotFx, 1)
+	if g1 < 0.55 || g1 > 0.65 {
+		t.Fatalf("드래그 뒤 게인 %v(≈0.594 예상)", g1)
+	}
+	if b1 != uint8(engine.Unbound) {
+		t.Fatalf("비결속 케이블 결속이 %d로 변함(Unbound 예상)", b1)
+	}
+	if after := h.fb.rack().NumCables(); after != before {
+		t.Fatalf("케이블 수 %d→%d(불변 예상)", before, after)
+	}
+	if !h.v.jackDrag.pop.on {
+		t.Fatal("드래그 놓음에 팝업 닫힘(판은 유지 예상)")
+	}
+}
+
+// 7e. 결속 팝업 게인 드래그(P5-gain 게이트 5): 결속 케이블(메인 IN L = 코러스 L 리턴,
+// 결속 ChoMix)의 드래그는 SetParam만 보낸다(Connect의 D가 결속을 다시 써 결속을 끊는다).
+// 케이블 결속은 불변이고 게인은 파라미터에서 유도된다(ChoMix → ×0.8).
+func TestRearGainPopBoundDrag(t *testing.T) {
+	h := newHarness(t)
+	enterRear(t, h)
+	popTapJack(t, h, engine.SlotMain, 0)
+	if !h.v.jackDrag.pop.on {
+		t.Fatal("전제: 메인 IN L 탭에 팝업 미개방")
+	}
+	h.fb.cmds = nil
+	r := popScreenRect(h)
+	cx, cy := r[0]+r[2]/2, r[1]+r[3]/2
+	h.frame(ptrPress(-1, cx, cy))
+	for i := 1; i <= 4; i++ {
+		h.frame(ptrMove(-1, cx, cy-10*float64(i)))
+	}
+	h.frame(ptrRel(-1, cx, cy-40))
+	sp := rackCmds(h, engine.SetParam)
+	if len(sp) == 0 {
+		t.Fatal("결속 드래그에 SetParam 송신 없음")
+	}
+	for _, c := range sp {
+		if c.A != uint8(engine.ChoMix) {
+			t.Fatalf("SetParam %+v(A=ChoMix %d 예상)", c, engine.ChoMix)
+		}
+	}
+	if last := sp[len(sp)-1].V; last < 0.75 || last > 0.85 { // 0.5 + 40/136 ≈ 0.794
+		t.Fatalf("마지막 송신 값 %v(≈0.794 예상)", last)
+	}
+	for _, k := range [...]engine.CmdKind{engine.Connect, engine.Disconnect} {
+		if n := len(rackCmds(h, k)); n != 0 {
+			t.Fatalf("결속 드래그에 %d번 종류 송신 %d건(0 예상)", k, n)
+		}
+	}
+	if !h.v.jackDrag.pop.on {
+		t.Fatal("드래그 놓음에 팝업 닫힘(판은 유지 예상)")
+	}
+	// 게인의 정본은 파라미터: 마지막 SetParam을 미러 엔진에 적용하면(applyParam → setBound)
+	// 재독 표에서 케이블 게인이 0.8×파라미터로 따라온다. fakeBridge의 Cmd는 params만
+	// 미러하므로 랙 반영은 테스트가 직접 적용한다(장치 테스트 관례).
+	h.fb.rack().Apply(sp[len(sp)-1])
+	h.frame()
+	g, b := cableAt(h, engine.SlotChorus, 0, engine.SlotMain, 0)
+	if b != uint8(engine.ChoMix) {
+		t.Fatalf("결속 %d→%d(불변 예상)", uint8(engine.ChoMix), b)
+	}
+	if g < 0.6 || g > 0.68 { // 0.8 × 0.794 ≈ 0.635
+		t.Fatalf("결속 게인 %v(≈0.635 = 0.8×파라미터 예상)", g)
+	}
+}
+
+// 7f. 팝업 닫힘(P5-gain 게이트 6): 판 밖 탭 · 앞면 복귀(장치 이름판 탭) · 대상 케이블이
+// 다른 경로로 뽑힘(재독 표에서 사라짐). 앞면 복귀는 device.go의 잭 상태 리셋
+// (jackDrag = jackDrag{})이 팝업을 싣고 있어 구조적으로 닫는다.
+func TestRearGainPopClose(t *testing.T) {
+	h := newHarness(t)
+	enterRear(t, h)
+	// (a) 판 밖(빈 판) 탭 — 팝업만 닫히고 뒷면은 유지.
+	popTapJack(t, h, engine.SlotMain, 0)
+	if !h.v.jackDrag.pop.on {
+		t.Fatal("(a) 전제: 팝업 미개방")
+	}
+	h.fb.cmds = nil
+	tap(h, 360, 100)
+	if h.v.jackDrag.pop.on {
+		t.Fatal("(a) 판 밖 탭에 팝업 잔존")
+	}
+	if !h.v.rear {
+		t.Fatal("(a) 판 밖 탭이 앞면 전환으로 새어 나감(닫기만 해야 한다)")
+	}
+	assertNoRackCmds(t, h)
+	// (b) 다시 열고 장치 이름판 탭 — 앞면 복귀와 함께 닫힌다.
+	popTapJack(t, h, engine.SlotMain, 0)
+	if !h.v.jackDrag.pop.on {
+		t.Fatal("(b) 전제: 재개방 실패")
+	}
+	tapRearPlate(t, h, engine.SlotFx)
+	if h.v.jackDrag.pop.on {
+		t.Fatal("(b) 앞면 복귀에 팝업 잔존")
+	}
+	// (c) 다시 뒷면에서 열고 대상 케이블을 다른 경로로 뽑기 — 재독에서 사라지면 닫힌다.
+	// 이름판(앞면 맨 위)이 화면 안에 들어오게 스크롤을 돌려놓고 진입한다(테스트 12 관례).
+	h.v.scrollY, h.v.scrollV = 0, 0
+	enterRear(t, h)
+	popTapJack(t, h, engine.SlotMain, 0)
+	if !h.v.jackDrag.pop.on {
+		t.Fatal("(c) 전제: 재개방 실패")
+	}
+	h.fb.Cmd(engine.Cmd{Kind: engine.Disconnect, A: engine.SlotChorus, B: engine.SlotMain,
+		C: 0}, core.Human)
+	h.frame()
+	if h.v.jackDrag.pop.on {
+		t.Fatal("(c) 대상 케이블 소실에 팝업 잔존")
+	}
+	if !h.v.rear {
+		t.Fatal("(c) 케이블 소실 닫기가 앞면 전환으로 새어 나감")
+	}
+}
+
+// 7g. 팝업판 화면 내 클램프(P5-gain 게이트 7): 맨 아래 입력 잭(코러스 IN — 슬롯 8 샘플러
+// 행에는 입력 잭이 없다, 스펙 전제 수정)은 위로 열리고 좌측 클램프, 맨 위 입력 잭(fx DUCK)
+// 은 아래로 연다 — 어느 쪽이든 화면 720×1280에 전부 들어온다.
+func TestRearGainPopOnScreen(t *testing.T) {
+	h := newHarness(t)
+	enterRear(t, h)
+	// (a) 맨 아래: 코러스 IN(y 1730)을 scrollY 500 창에 — 아래 공간이 68판에 못 미쳐 위로.
+	h.v.scrollY = 500
+	bj := rearJackAt(t, h.v, engine.SlotChorus, 0, true)
+	tap(h, bj.CX, bj.CY-h.v.scrollY)
+	if !h.v.jackDrag.pop.on {
+		t.Fatal("(a) 전제: 코러스 IN 탭 팝업 미개방")
+	}
+	r := h.v.gainPopRect(h.fb)
+	if r[1]+r[3] > bj.CY {
+		t.Fatalf("(a) 맨 아래 잭 팝업이 아래로 열림(y %v..%v, 잭 %v — 위로 열어야)", r[1], r[1]+r[3], bj.CY)
+	}
+	if r[0] != popMargin {
+		t.Fatalf("(a) 좌측 클램프 x %v(popMargin %v 예상 — 잭 x 76 < 판 반폭 92)", r[0], popMargin)
+	}
+	sr := popScreenRect(h)
+	if sr[0] < 0 || sr[1] < 0 || sr[0]+sr[2] > core.LogicalW || sr[1]+sr[3] > core.LogicalH {
+		t.Fatalf("(a) 화면 밖 팝업 %v(720×1280 안 예상)", sr)
+	}
+	// (b) 맨 위: fx DUCK(y 1048)을 scrollMax(940) 창에 — 아래 여유가 넉넉해 아래로.
+	h2 := newHarness(t)
+	enterRear(t, h2)
+	h2.v.scrollY = h2.v.scrollMax
+	tj := rearJackAt(t, h2.v, engine.SlotFx, 0, true)
+	tap(h2, tj.CX, tj.CY-h2.v.scrollY)
+	if !h2.v.jackDrag.pop.on {
+		t.Fatal("(b) 전제: fx DUCK 탭 팝업 미개방")
+	}
+	r2 := h2.v.gainPopRect(h2.fb)
+	if r2[1] < tj.CY {
+		t.Fatalf("(b) 맨 위 잭 팝업이 위로 열림(y %v, 잭 %v — 아래 여유가 충분하다)", r2[1], tj.CY)
+	}
+	sr2 := popScreenRect(h2)
+	if sr2[0] < 0 || sr2[1] < 0 || sr2[0]+sr2[2] > core.LogicalW || sr2[1]+sr2[3] > core.LogicalH {
+		t.Fatalf("(b) 화면 밖 팝업 %v(720×1280 안 예상)", sr2)
+	}
+}
+
 // 8. 순환 거부 피드백. 스펙 전제 수정(P5-back-view 실측): 기본 랙에는 Fx→리버브가
 // 없어 "리버브 OUT → Fx IN"은 순환이 아니다(buildDefault 전수 확인). 미러 엔진에 먼저
 // Fx→리버브를 보내 전제를 만든 뒤 드래그하면 진짜 순환이다 — Connect는 보내되 표에
@@ -411,7 +762,8 @@ func tapRearPlate(t *testing.T, h *harness, slot int) {
 }
 
 // 13. 뒷면 Update 무할당(프레임 루프 계약): 정지·드래그 유지·거부 감쇠 중 어느 상태도
-// 힙 할당이 없어야 한다(스크롤 TestScrollNoAlloc 관례).
+// 힙 할당이 없어야 한다(스크롤 TestScrollNoAlloc 관례). (c)(d) P5-gain: 게인 팝업도
+// 정지·게인 드래그 유지 프레임에 할당을 내지 않는다(라벨은 개방 1회, 숫자는 값 변화시만).
 func TestRearUpdateNoAlloc(t *testing.T) {
 	h := newHarness(t)
 	enterRear(t, h)
@@ -427,6 +779,24 @@ func TestRearUpdateNoAlloc(t *testing.T) {
 	held[0].JustPressed = false
 	if a := testing.AllocsPerRun(200, func() { h.v.Update(h.ctx) }); a != 0 {
 		t.Fatalf("(b) 잭 잡은 채 할당 %.0f회/프레임(0 예상)", a)
+	}
+	h.ctx.Pointers = nil
+	// (c) 팝업 열린 채 정지 — 표 재독(rev 불변)도 송신도 일어나지 않는 프레임.
+	popTapJack(t, h, engine.SlotMain, 0)
+	if !h.v.jackDrag.pop.on {
+		t.Fatal("(c) 전제: 팝업 미개방")
+	}
+	if a := testing.AllocsPerRun(200, func() { h.v.Update(h.ctx) }); a != 0 {
+		t.Fatalf("(c) 팝업 정지 상태 할당 %.0f회/프레임(0 예상)", a)
+	}
+	// (d) 팝업 게인 드래그 유지(이동 없음) — 잡기만 하고 값이 안 변하는 프레임.
+	r := popScreenRect(h)
+	held = []core.Pointer{ptrPress(-1, r[0]+r[2]/2, r[1]+r[3]/2)}
+	h.ctx.Pointers = held
+	h.v.Update(h.ctx)
+	held[0].JustPressed = false
+	if a := testing.AllocsPerRun(200, func() { h.v.Update(h.ctx) }); a != 0 {
+		t.Fatalf("(d) 팝업 드래그 유지 할당 %.0f회/프레임(0 예상)", a)
 	}
 	h.ctx.Pointers = nil
 }

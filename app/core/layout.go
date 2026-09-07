@@ -26,6 +26,9 @@ type DeviceLayout struct {
 	Display struct {
 		Rect Rect `json:"rect"`
 	} `json:"display"`
+	// paramKnob — ParamID → 노브 라벨 역인덱스(ParamKnobName이 최초 호출에서 채운다). JSON 밖.
+	paramKnob map[engine.ParamID]string
+
 	// ChordTrack — 코드 트랙 띠(8마디 셀, 앱이 그린다; §12). 헤더 아래 어두운 빈 판(실측 std ≈ 7~12).
 	ChordTrack struct {
 		Rect Rect `json:"rect"`
@@ -231,6 +234,29 @@ var devSection = map[string]struct {
 }{
 	"poly":    {engine.SlotPoly, polyKnob},
 	"sampler": {engine.SlotSampler, samplerKnob},
+}
+
+// ParamKnobName — ParamID → 그 파라미터를 도는 **앞면 노브의 라벨**("REV_CY" 같은 것).
+// 결속 케이블의 게인이 어느 노브에서 오는지 뒷면 게인 팝업이 보여주기 위한 것이다.
+//
+// 표를 새로 만들지 않는다 — 레이아웃의 노브를 KnobParam으로 **역인덱싱**한다. 매핑의 단일
+// 소유자는 여전히 KnobParam이고, 이 함수는 그 역함수일 뿐이라 둘이 어긋날 수 없다.
+// 패널에 자리가 없는 파라미터(딜레이 센드 8개 등)는 false — 부르는 쪽이 갈음 표시를 고른다.
+// 인덱스는 최초 호출에서 한 번 만든다(노브 63개 스캔 — 팝업 열 때만 불린다).
+func (l *DeviceLayout) ParamKnobName(id engine.ParamID) (string, bool) {
+	if l.paramKnob == nil {
+		l.paramKnob = make(map[engine.ParamID]string, len(l.Knobs))
+		for i := range l.Knobs {
+			k := &l.Knobs[i]
+			if p, ok := KnobParam(k.Section, k.Name); ok {
+				if _, dup := l.paramKnob[p]; !dup {
+					l.paramKnob[p] = k.Name
+				}
+			}
+		}
+	}
+	n, ok := l.paramKnob[id]
+	return n, ok
 }
 
 // KnobDevParam — 장치 로컬 파라미터 노브(§14.1 DeviceParam): 섹션·이름 → (슬롯, k). 알 수 없으면

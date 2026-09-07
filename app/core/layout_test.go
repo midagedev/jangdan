@@ -312,3 +312,40 @@ func TestRearLayoutPorts(t *testing.T) {
 		}
 	}
 }
+
+// ParamKnobName — 결속 케이블 게인이 어느 노브에서 오는지 뒷면 팝업이 보여주기 위한 역인덱스.
+// 표를 새로 만들지 않고 KnobParam을 뒤집는다는 것이 계약이라, 이 테스트는 **두 방향이 서로의
+// 역함수인지**를 잰다(한쪽만 고치면 빨강). 노브가 없는 파라미터는 false여야 한다 — 그 자리에
+// 아무 이름이나 돌려주면 팝업이 거짓말을 한다.
+func TestParamKnobNameIsInverseOfKnobParam(t *testing.T) {
+	l, err := LoadDeviceLayout(assets.DeviceLayoutJSON)
+	if err != nil {
+		t.Fatalf("LoadDeviceLayout: %v", err)
+	}
+	seen := 0
+	for i := range l.Knobs {
+		k := &l.Knobs[i]
+		id, ok := KnobParam(k.Section, k.Name)
+		if !ok {
+			continue // 장치 로컬 파라미터 노브(KnobDevParam 쪽) — 이 표의 대상이 아니다
+		}
+		seen++
+		got, ok := l.ParamKnobName(id)
+		if !ok {
+			t.Fatalf("노브 %q/%q → ParamID %d 인데 역인덱스에 없다", k.Section, k.Name, id)
+		}
+		if back, ok2 := KnobParam(k.Section, got); !ok2 || back != id {
+			// 같은 ParamID를 도는 노브가 둘이면 첫 것을 돌려준다 — 그 경우에도 되돌린 ID는 같아야 한다.
+			if id2, _ := KnobParam(k.Section, got); id2 != id {
+				t.Fatalf("역인덱스가 왕복하지 않는다: %d → %q → %d", id, got, id2)
+			}
+		}
+	}
+	if seen < 20 {
+		t.Fatalf("전역 파라미터 노브 %d개밖에 못 봤다 — 레이아웃이 비었거나 KnobParam이 죽었다", seen)
+	}
+	// 패널에 자리가 없는 파라미터는 이름이 없어야 한다(딜레이 센드 — 노브가 없다).
+	if n, ok := l.ParamKnobName(engine.DelaySend(engine.BassA)); ok {
+		t.Fatalf("노브 없는 파라미터에 이름 %q — 팝업이 거짓말을 한다", n)
+	}
+}
