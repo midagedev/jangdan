@@ -313,21 +313,48 @@ func TestRearScrollJackHit(t *testing.T) {
 	}
 }
 
-// 11. 케이블 표 ↔ 그려진 베지어 수 일치(§14.3 게이트). 기본 랙 케이블 32개의 근거:
-// buildDefault — dry 5 + 폴리 센드 3 + 딜레이 센드 8 + 리버브 센드 8 + 코러스 2 + 리턴 6.
-// 32개 전부 양 끝 잭이 rear.json에 있으므로(기본 랙 8장치 = 뒷면 8행 전부) 전부 그려진다.
-// 헤드리스 Draw는 픽셀 읽기 없이 카운터로 잰다(rearDraws).
+// 11. 케이블 표 ↔ 그려진 베지어 수 일치(§14.3 게이트). 기본 랙 케이블 35개의 근거:
+// buildDefault — dry 6 + 폴리 센드 3 + 샘플러 센드 2 + 딜레이 센드 8 + 리버브 센드 8 +
+// 코러스 2 + 리턴 6. 35개 전부 양 끝 잭이 rear.json에 있으므로(기본 랙 9장치 = 뒷면 9행
+// 전부) 전부 그려진다. 헤드리스 Draw는 픽셀 읽기 없이 카운터로 잰다(rearDraws).
 func TestRearDrawMatchesTable(t *testing.T) {
 	h := newHarness(t)
 	enterRear(t, h)
 	h.frame() // 표 동기화
-	if n := h.v.nCables; n != 32 {
-		t.Fatalf("기본 랙 케이블 %d개(32 예상 — dry 5+폴리 3+딜레이 8+리버브 8+코러스 2+리턴 6)", n)
+	if n := h.v.nCables; n != 35 {
+		t.Fatalf("기본 랙 케이블 %d개(35 예상 — dry 6+폴리 3+샘플러 2+딜레이 8+리버브 8+코러스 2+리턴 6)", n)
 	}
 	screen := ebiten.NewImage(720, 1280)
 	h.v.Draw(screen, h.ctx)
 	if h.v.rearDraws != h.v.nCables {
 		t.Fatalf("그려진 케이블 %d개(표 %d개 예상)", h.v.rearDraws, h.v.nCables)
+	}
+}
+
+// 11b. 샘플러 뒷면 행(P5-sampler): 슬롯 8 출력 잭 히트가 잭 드래그를 잡고, 케이블 색은
+// 슬롯 8 표값(wire.py 띠색 (170,90,120) — rear.png 밴드 실측 중앙값 (165,88,117)과 차 5·2·3).
+// 기본 랙이 슬롯 8 발신 케이블을 실제로 가지고 있어 이 색이 그려진다(색 = 기능 계약).
+func TestRearSamplerJack(t *testing.T) {
+	h := newHarness(t)
+	enterRear(t, h)
+	h.v.scrollY = h.v.scrollMax // 슬롯 8 행(v5 맨 아래)을 화면 안으로
+	j := rearJackAt(t, h.v, engine.SlotSampler, 0, false)
+	h.frame(ptrPress(-1, j.CX, j.CY-h.v.scrollY))
+	if !h.v.jackDrag.on || h.v.jackDrag.srcSlot != engine.SlotSampler || h.v.jackDrag.srcPort != 0 {
+		t.Fatalf("샘플러 OUT 잭 히트 실패: %+v", h.v.jackDrag)
+	}
+	h.frame(ptrRel(-1, j.CX, j.CY-h.v.scrollY)) // 빈 곳 놓기 — 정리만
+	// 슬롯 8 케이블색의 **소유자는 TestCableColorsMatchPanel**이다(그림 띠 실측과 대조).
+	// 여기에 색 리터럴을 또 두면 재핀할 때마다 두 자리를 고쳐야 하고, 실제로 한쪽만 고쳐
+	// 빨강이 났다(2026-09-07). 이 테스트는 잭 히트와 케이블 수만 잰다.
+	n := 0
+	for i := 0; i < h.v.nCables; i++ {
+		if h.v.cables[i].Src == uint8(engine.SlotSampler) {
+			n++
+		}
+	}
+	if n == 0 {
+		t.Fatal("기본 랙에 슬롯 8 발신 케이블 없음(색이 그려지지 않는다)")
 	}
 }
 

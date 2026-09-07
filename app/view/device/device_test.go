@@ -73,6 +73,24 @@
 //	                                        |   dev 노브 0·hasSection[4] false·scrollMax 불변
 //	매핑 없는 poly 노브 이름 → New 에러      | TestPolyUnknownKnobName: TEMPO 이름 → 매핑 없음
 //
+// — P5-sampler 계약↔단언(샘플러 모듈 바인딩 — §14.1 DeviceParam, 폴리와 같은 관례) —
+//
+//	계약                                    | 단언
+//	----------------------------------------|----------------------------------------------
+//	sampler 노브 8 = KnobDevParam(슬롯 8,k) | TestLayoutCounts: 노브 63·이름판 9·dev 노브
+//	                                        |   16개(poly 8+sampler 8, 각 슬롯·k 범위 점검)
+//	sampler 노브 드래그 → DeviceParam       | TestSamplerKnobDevParam: 8종 각각 드래그 →
+//	  {A:8,B:k}(SetParam 0개)               |   DeviceParam 정확히 1개·SetParam 0개·k 중복 없음
+//	라벨 표(ATTACK/RELEASE만 축약)·띠색     | TestSamplerLabels: 8종 표 + 띠색 (170,90,120)
+//	팩 표시창 = PackNames[int(q·7+0.5)]     | TestSamplerPackDisplay: q=0→PLUCK·1→SUB·
+//	  (엔진 SmpSelect 유도식과 같은 식)     |   0.5→SHAKE 리터럴 핀, 무변화 재구성 0
+//	FlagSampler 점등·150ms 감쇠·플래그 분리 | TestSamplerTrigDot: 샘플러 점 α=1·폴리 점 0
+//	                                        |   (통합 trigDotA 회귀 방어), 역방향도 측정
+//	poly·sampler 없는 구 레이아웃 → OK      | TestPolyAbsentOldLayout: 두 섹션 제거 뷰 OK,
+//	                                        |   dev 노브 0·hasSection[4][5] false·scrollMax 불변
+//	뒷면 슬롯 8 행 잭 히트·케이블 색        | back_test.go TestRearSamplerJack: OUT 잭 드래그
+//	                                        |   srcSlot 8·colCable[8]=(170,90,120)·발신 케이블 존재
+//
 // FAIL-first(구현 전 소스에서 실측, 2026-09-06):
 //
 //	go test ./app/view/device/ -run 'TestTransport|TestDisplayCache' -count=1
@@ -101,6 +119,21 @@
 //	  (layout.json은 이미 v4 poly 8노브를 데리고 있는데 KnobParam이 poly를 모른다).
 //	  KnobDevParam 폴백 추가 뒤 TestLayoutCounts "노브 47개(55 예상)"·"이름판 7개(8 예상)"
 //	  이 다음 적색 — 실측 갱신으로 닫았다.
+//
+// P5-sampler(2026-09-07) FAIL-first(구현 전 소스 — v5 레이아웃 반영 전, 같은 형태):
+//
+//	go test ./app/view/device/ -count=1
+//	→ 전 테스트가 newView에서 "device: 노브 "SELECT"의 알 수 없는 섹션 "sampler""로 사망
+//	  (layout.json은 이미 v5 sampler 8노브를 데리고 있는데 secOf가 sampler를 모른다).
+//	  secSampler·samplerKnob 추가 뒤 TestLayoutCounts "노브 55개(63 예상)"·"이름판 8개
+//	  (9 예상)"·TestRearDrawMatchesTable "기본 랙 케이블 35개(32 예상)"가 다음 적색 —
+//	  실측 갱신으로 닫았다. 신규 단언(TestSampler*)은 구현과 동시 도입이라 core 쪽 적색
+//	  "KnobDevParam(sampler, …) = false"와 위 세 적색이 이 라운드의 FAIL-first 증거다.
+//	변이 기록(2026-09-07, 한 줄 변이로 재확인): 팩 유도식 ×7→×8 = TestSamplerPackDisplay
+//	  "index out of range [8]" 패닉(q=1). 플래그 래치 FlagSampler→FlagPoly 겹침 =
+//	  TestSamplerTrigDot "점화 프레임 α = 0". colCable[8] R 170→200 = TestRearSamplerJack
+//	  리터럴 적색 + TestCableColorsMatchPanel "띠 실측 [165 88 117] ≠ {200 90 120}"(차 35>6).
+//	  core 레지스트리 sampler 줄 삭제 = TestKnobDevParamTable "기대 섹션 2개(1개와 같아야)".
 package device
 
 import (
@@ -119,8 +152,8 @@ import (
 type fakeBridge struct {
 	cmds      []recCmd
 	params    [engine.NumParams]float32
-	devParams [engine.DevParams]float32 // 폴리 슬롯 로컬 파라미터 미러(DevParam)
-	bass      [2][engine.Steps][2]uint8 // [note, flags]
+	devParams [2][engine.DevParams]float32 // 장치 로컬 파라미터 미러 — [0]=폴리(슬롯 7), [1]=샘플러(슬롯 8)
+	bass      [2][engine.Steps][2]uint8    // [note, flags]
 	drum      [6][engine.Steps]uint8
 	muted     [engine.NumParts]bool
 	slot      [2]uint8
@@ -195,8 +228,8 @@ func (f *fakeBridge) Param(id engine.ParamID) float32 {
 }
 
 func (f *fakeBridge) DevParam(slot, k int) float32 {
-	if slot == engine.SlotPoly && k >= 0 && k < engine.DevParams {
-		return f.devParams[k]
+	if i := slot - engine.SlotPoly; i >= 0 && i < len(f.devParams) && k >= 0 && k < engine.DevParams {
+		return f.devParams[i][k]
 	}
 	return -1
 }
@@ -228,9 +261,9 @@ func (f *fakeBridge) Cmd(c engine.Cmd, a core.Author) {
 		if c.A < uint8(engine.NumParams) {
 			f.params[c.A] = c.V
 		}
-	case engine.DeviceParam: // P5-poly — 폴리 슬롯 로컬 파라미터 미러(송신→표시값 추적 단언용)
-		if c.A == uint8(engine.SlotPoly) && c.B < uint8(engine.DevParams) {
-			f.devParams[c.B] = c.V
+	case engine.DeviceParam: // P5-poly·P5-sampler — 장치 로컬 파라미터 미러(송신→표시값 추적 단언용)
+		if i := int(c.A) - engine.SlotPoly; i >= 0 && i < len(f.devParams) && c.B < uint8(engine.DevParams) {
+			f.devParams[i][c.B] = c.V
 		}
 	case engine.BassStep:
 		if c.A <= 1 {
@@ -369,9 +402,10 @@ func pressButton(h *harness, b *button) {
 func TestLayoutCounts(t *testing.T) {
 	h := newHarness(t)
 	// P4-scroll(v3 레이아웃): 믹서 노브 12·fx2 6, fx2 장식 버튼 4, 믹서 활동 LED 8·fx2 장식 LED 4 추가.
-	// P5-poly(v4): 폴리 노브 8·이름판 1 추가 — 노브 47+8 = 55, 이름판 7+1 = 8.
-	if len(h.v.knobs) != 55 {
-		t.Fatalf("노브 %d개(55 예상)", len(h.v.knobs))
+	// P5-poly(v4): 폴리 노브 8·이름판 1 추가 — 노브 55, 이름판 8. P5-sampler(v5): 샘플러 노브
+	// 8·이름판 1·팩 표시창 1 추가 — 노브 55+8 = 63, 이름판 8+1 = 9.
+	if len(h.v.knobs) != 63 {
+		t.Fatalf("노브 %d개(63 예상)", len(h.v.knobs))
 	}
 	if len(h.v.buttons) != 42 {
 		t.Fatalf("버튼 %d개(42 예상)", len(h.v.buttons))
@@ -382,12 +416,22 @@ func TestLayoutCounts(t *testing.T) {
 	if len(h.v.leds) != 48 {
 		t.Fatalf("LED %d개(48 예상)", len(h.v.leds))
 	}
-	if len(h.v.layout.Plates) != 8 {
-		t.Fatalf("이름판 %d개(8 예상)", len(h.v.layout.Plates))
+	if len(h.v.layout.Plates) != 9 {
+		t.Fatalf("이름판 %d개(9 예상)", len(h.v.layout.Plates))
 	}
-	// 55 노브 전부가 전역 KnobParam 또는 장치 로컬 KnobDevParam(슬롯 7)으로 매핑 —
-	// dev 노브는 정확히 8개(레이아웃 poly 섹션과 1:1). 매핑 안 된 노브는 newView가 이미 에러.
-	dev := 0
+	if len(h.v.layout.Displays) != 3 {
+		t.Fatalf("표시창 %d개(3 예상 — basslineA·B + 샘플러 팩)", len(h.v.layout.Displays))
+	}
+	// 63 노브 전부가 전역 KnobParam 또는 장치 로컬 KnobDevParam으로 매핑 — dev 노브는
+	// 정확히 16개(poly 8 + sampler 8, 각 섹션과 1:1). 매핑 안 된 노브는 newView가 이미 에러.
+	wantDev := map[uint8]struct {
+		slot   int
+		params int
+	}{
+		secPoly:    {engine.SlotPoly, engine.PolyParams},
+		secSampler: {engine.SlotSampler, engine.SmpParams},
+	}
+	dev, per := 0, map[uint8]int{}
 	for _, k := range h.v.knobs {
 		if _, ok := core.KnobParam(sectionName(k.sec), k.name); ok {
 			if k.dev {
@@ -395,13 +439,20 @@ func TestLayoutCounts(t *testing.T) {
 			}
 			continue
 		}
-		if !k.dev || k.slot != engine.SlotPoly || k.k < 0 || k.k >= engine.PolyParams {
+		w, ok := wantDev[k.sec]
+		if !ok || !k.dev || k.slot != w.slot || k.k < 0 || k.k >= w.params {
 			t.Fatalf("노브 %s(%s) 매핑 오류(dev %v, 슬롯 %d, k %d)", k.name, sectionName(k.sec), k.dev, k.slot, k.k)
 		}
 		dev++
+		per[k.sec]++
 	}
-	if dev != 8 {
-		t.Fatalf("장치 로컬 노브 %d개(8 예상)", dev)
+	if dev != 16 {
+		t.Fatalf("장치 로컬 노브 %d개(16 예상)", dev)
+	}
+	for sec, w := range map[uint8]int{secPoly: 8, secSampler: 8} {
+		if per[sec] != w {
+			t.Fatalf("섹션 %d dev 노브 %d개(%d 예상)", sec, per[sec], w)
+		}
 	}
 	// 6/6 패드가 PadPart(2..7)로 매핑됨.
 	for _, p := range h.v.pads {
@@ -441,6 +492,8 @@ func sectionName(sec uint8) string {
 		return "mixer"
 	case secFx2:
 		return "fx2"
+	case secSampler:
+		return "sampler"
 	}
 	return "poly"
 }
@@ -1346,8 +1399,8 @@ func TestPolyKnobDevParam(t *testing.T) {
 	if !k.dev || k.slot != engine.SlotPoly || k.k != engine.PolyCutoff {
 		t.Fatalf("CUTOFF 매핑 (dev %v, 슬롯 %d, k %d)((true, %d, %d) 예상)", k.dev, k.slot, k.k, engine.SlotPoly, engine.PolyCutoff)
 	}
-	// 값 소스: 전역 파라미터가 아니라 미러(devParams[0]). 기본값 0이 아닌 0.25를 심어 구분.
-	h.fb.devParams[0] = 0.25
+	// 값 소스: 전역 파라미터가 아니라 미러(devParams[폴리][0]). 기본값 0이 아닌 0.25를 심어 구분.
+	h.fb.devParams[0][0] = 0.25
 	h.frame()
 	if got := h.v.knobValue(h.ctx, k); math.Abs(float64(got)-0.25) > 1e-6 {
 		t.Fatalf("미러 표시값 %v(0.25 예상)", got)
@@ -1382,8 +1435,8 @@ func TestPolyKnobDevParam(t *testing.T) {
 	if last.A != uint8(engine.SlotPoly) || last.B != uint8(engine.PolyCutoff) || last.V != 1 {
 		t.Fatalf("DeviceParam = %+v({A:7 B:0 V:1} 예상)", last)
 	}
-	if h.fb.devParams[0] != 1 {
-		t.Fatalf("미러 갱신 안 됨 %v(1 예상)", h.fb.devParams[0])
+	if h.fb.devParams[0][0] != 1 {
+		t.Fatalf("미러 갱신 안 됨 %v(1 예상)", h.fb.devParams[0][0])
 	}
 	// 무변화 프레임 → 송신 0(전역 노브 계약과 같은 절약).
 	h.fb.cmds = nil
@@ -1393,7 +1446,7 @@ func TestPolyKnobDevParam(t *testing.T) {
 	}
 	// 이동 200px ≥ 탭 → 릴리스에 스윕 없음. useLocal 해제 → 표시값은 다시 미러를 따른다
 	// (뷰 전환 후에도 로컬 값이 얼어붙지 않는다는 잔존 클래스의 직접 단언).
-	h.fb.devParams[0] = 0.4
+	h.fb.devParams[0][0] = 0.4
 	h.frame(ptrRel(-1, k.cx, sy-200))
 	if k.swActive {
 		t.Fatal("이동 릴리스에 스윕 시작(탭 아닌데)")
@@ -1423,7 +1476,7 @@ func TestPolyKnobSweep(t *testing.T) {
 	if k == nil || k.k != engine.PolyLevel {
 		t.Fatal("poly LEVEL 노브 없음(k 7 예상)")
 	}
-	h.fb.devParams[engine.PolyLevel] = 0.3
+	h.fb.devParams[0][engine.PolyLevel] = 0.3
 	h.frame(ptrPress(-1, k.cx, k.cy-h.v.scrollY))
 	h.frame(ptrRel(-1, k.cx, k.cy-h.v.scrollY)) // 이동 0 → 탭 → 2바 스윕
 	if !k.swActive {
@@ -1451,11 +1504,144 @@ func TestPolyKnobSweep(t *testing.T) {
 	if math.Abs(float64(lastV-0.3)) > 1.0/4095 {
 		t.Fatalf("최종 송신값 %v(시작값 0.3 ±1/4095 예상)", lastV)
 	}
-	if math.Abs(float64(h.fb.devParams[engine.PolyLevel]-0.3)) > 1.0/4095 {
-		t.Fatalf("미러 최종값 %v(0.3 ±1/4095 예상)", h.fb.devParams[engine.PolyLevel])
+	if math.Abs(float64(h.fb.devParams[0][engine.PolyLevel]-0.3)) > 1.0/4095 {
+		t.Fatalf("미러 최종값 %v(0.3 ±1/4095 예상)", h.fb.devParams[0][engine.PolyLevel])
 	}
 	if k.swActive || k.useLocal {
 		t.Fatal("스윕 완료 후 활성/로컬 잔존")
+	}
+}
+
+// — 계약↔단언: 샘플러 모듈 바인딩(P5-sampler — §14.1 DeviceParam, 폴리와 같은 관례) —
+
+// TestSamplerKnobDevParam — 8노브 전부 (슬롯 8, 예상 k)로 매핑·드래그 송신도 정확히 그
+// DeviceParam 1개(A=8, B=k). SetParam 0개(전역 파라미터 오염 봉쇄). 폴리와 같은 경로라
+// 미러 추적·스윕 세부는 TestPolyKnobDevParam·TestPolyKnobSweep이 이미 잰다.
+func TestSamplerKnobDevParam(t *testing.T) {
+	h := newHarness(t)
+	h.v.scrollY = h.v.scrollMax // 샘플러 행(cy ≈ 2208)이 화면 안에 오게
+	want := map[string]int{
+		"SELECT": engine.SmpSelect, "TUNE": engine.SmpTune, "START": engine.SmpStart, "LOOP": engine.SmpLoop,
+		"ATTACK": engine.SmpAttack, "RELEASE": engine.SmpRelease, "TONE": engine.SmpTone, "LEVEL": engine.SmpLevel,
+	}
+	seen := map[int]bool{}
+	for name, wk := range want {
+		k := knobAt(h.v, secSampler, name)
+		if k == nil {
+			t.Fatalf("sampler %s 노브 없음", name)
+		}
+		if !k.dev || k.slot != engine.SlotSampler || k.k != wk {
+			t.Fatalf("%s 매핑 (dev %v, 슬롯 %d, k %d)((true, %d, %d) 예상)", name, k.dev, k.slot, k.k, engine.SlotSampler, wk)
+		}
+		if seen[wk] {
+			t.Fatalf("k %d 이중 매핑(%s)", wk, name)
+		}
+		seen[wk] = true
+		sy := k.cy - h.v.scrollY
+		if sy < 0 || sy >= core.LogicalH {
+			t.Fatalf("%s 화면 y %v가 화면 밖(scrollMax %v)", name, sy, h.v.scrollMax)
+		}
+		h.fb.devParams[1][wk] = 0.25
+		h.frame(ptrPress(-1, k.cx, sy))
+		if _, ok := h.v.JustGrabbed(); ok {
+			t.Fatal("dev 노브 잡음이 JustGrabbed에 전역 ParamID로 보고됨")
+		}
+		h.fb.cmds = nil
+		h.frame(ptrMove(-1, k.cx, sy-200)) // 200px 상승 = 0.25+1.0 → 클램프 1
+		dp, sp := 0, 0
+		var last engine.Cmd
+		for _, r := range h.fb.cmds {
+			switch r.c.Kind {
+			case engine.DeviceParam:
+				dp++
+				last = r.c
+			case engine.SetParam:
+				sp++
+			}
+		}
+		if dp != 1 || sp != 0 {
+			t.Fatalf("%s 드래그 프레임 DeviceParam %d·SetParam %d(1·0 예상)", name, dp, sp)
+		}
+		if last.A != uint8(engine.SlotSampler) || last.B != uint8(wk) || last.V != 1 {
+			t.Fatalf("%s DeviceParam = %+v({A:8 B:%d V:1} 예상)", name, last, wk)
+		}
+		h.frame(ptrRel(-1, k.cx, sy-200)) // 이동 200px ≥ 탭 → 스윕 없음
+	}
+	if len(seen) != engine.SmpParams {
+		t.Fatalf("고유 k %d개(%d 예상)", len(seen), engine.SmpParams)
+	}
+}
+
+// TestSamplerPackDisplay — 팩 표시창: SELECT 값 q → engine.PackNames[int(q·7+0.5)]
+// (engine/sampler.go SmpSelect 유도식과 정확히 같다 — q=0→PLUCK, q=1→SUB, 중간값).
+// 문자열 리터럴을 하드코딩해 knobValue→유도식→PackNames 사슬 전체를 핀으로 박는다.
+// 값이 변화하지 않으면 재구성하지 않는다(캐시 계약).
+func TestSamplerPackDisplay(t *testing.T) {
+	h := newHarness(t)
+	for _, c := range []struct {
+		q    float32
+		idx  int32
+		want string
+	}{
+		{0, 0, "PLUCK"}, {1, 7, "SUB"}, {0.5, 4, "SHAKE"},
+	} {
+		h.fb.devParams[1][engine.SmpSelect] = c.q
+		h.frame()
+		if h.v.smpDisp.idx != c.idx {
+			t.Fatalf("q=%v → 인덱스 %d(%d 예상 — int(q·7+0.5), engine SmpSelect와 같은 식)", c.q, h.v.smpDisp.idx, c.idx)
+		}
+		if h.v.smpDisp.text != c.want {
+			t.Fatalf("q=%v → 표시 %q(%q 예상)", c.q, h.v.smpDisp.text, c.want)
+		}
+		if h.v.smpDisp.text != engine.PackNames[c.idx] {
+			t.Fatalf("표시 %q가 PackNames[%d] %q와 다름(단일 소유자 위반)", h.v.smpDisp.text, c.idx, engine.PackNames[c.idx])
+		}
+	}
+	// 캐시: 같은 값이면 재구성 0(다른 표시창과 같은 절약 계약).
+	h.fb.devParams[1][engine.SmpSelect] = 0.5 // 직전 프레임 값(마지막 케이스)과 같음
+	before := h.v.rebuilds
+	h.run(5)
+	if h.v.rebuilds != before {
+		t.Fatalf("무변화 5프레임에 재구성 %d회(0 예상)", h.v.rebuilds-before)
+	}
+	h.fb.devParams[1][engine.SmpSelect] = 0
+	h.frame()
+	if h.v.rebuilds == before {
+		t.Fatal("값 변화에 재구성 없음")
+	}
+}
+
+// TestSamplerTrigDot — FlagSampler는 샘플러 점만 점화(폴리 점은 그대로 — 통합 함수의
+// 회귀 방어)하고 150ms 감쇠는 폴리와 같다. 역방향(FlagPoly → 샘플러 점 안 밝힘)도 잰다.
+func TestSamplerTrigDot(t *testing.T) {
+	h := newHarness(t)
+	h.frame()
+	if a := trigDotA(h.v.trigT[1], h.ctx.Now); a != 0 {
+		t.Fatalf("미점화 α = %v(0 예상)", a)
+	}
+	h.fb.tick.Flags = engine.FlagSampler
+	h.frame()
+	h.fb.tick.Flags = 0
+	if a := trigDotA(h.v.trigT[1], h.ctx.Now); a != 1 {
+		t.Fatalf("점화 프레임 α = %v(1 예상)", a)
+	}
+	if a := trigDotA(h.v.trigT[0], h.ctx.Now); a != 0 {
+		t.Fatalf("FlagSampler가 폴리 점도 밝힘 α = %v(0 예상 — 플래그 분리 회귀)", a)
+	}
+	h.run(9) // 0.15s — e^−3 ≈ 0.0498
+	if a := trigDotA(h.v.trigT[1], h.ctx.Now); a >= 0.1 {
+		t.Fatalf("150ms 뒤 α = %v(< 0.1 예상)", a)
+	}
+	// 역방향: FlagPoly는 폴리 점만.
+	h.run(60) // 샘플러 점 완전 소거(e^−20·2.65 ≈ 0)
+	h.fb.tick.Flags = engine.FlagPoly
+	h.frame()
+	h.fb.tick.Flags = 0
+	if a := trigDotA(h.v.trigT[0], h.ctx.Now); a != 1 {
+		t.Fatalf("FlagPoly 점화 α = %v(1 예상)", a)
+	}
+	if a := trigDotA(h.v.trigT[1], h.ctx.Now); a > 1.0/255 {
+		t.Fatalf("FlagPoly가 샘플러 점도 밝힘 α = %v(0 예상)", a)
 	}
 }
 
@@ -1475,74 +1661,105 @@ func TestPolyLabels(t *testing.T) {
 	if colPlateBand[6] != (color.NRGBA{R: 42, G: 133, B: 178, A: 255}) {
 		t.Fatalf("poly 띠색 %v((42,133,178) 예상 — 채택 패널 seed 7 띠 중앙값 실측, 2026-09-06 리드 재조정)", colPlateBand[6])
 	}
-	if len(colPlateBand) != 7 {
-		t.Fatalf("띠색 표 %d항(7 예상)", len(colPlateBand))
+	if len(colPlateBand) != 8 {
+		t.Fatalf("띠색 표 %d항(8 예상 — bassA·B·drums·fx·mixer·fx2·poly·sampler)", len(colPlateBand))
+	}
+}
+
+// TestSamplerLabels — 샘플러 라벨 표: ATTACK·RELEASE만 축약(폴리와 같은 라벨판 폭 예산),
+// 나머지 6종은 레이아웃 이름 그대로. 띠색은 wire.py 와이어프레임 틴트(채색 뒤 리드 재핀).
+func TestSamplerLabels(t *testing.T) {
+	for _, c := range []struct{ name, want string }{
+		{"SELECT", "SELECT"}, {"TUNE", "TUNE"}, {"START", "START"}, {"LOOP", "LOOP"},
+		{"ATTACK", "ATK"}, {"RELEASE", "REL"}, {"TONE", "TONE"}, {"LEVEL", "LEVEL"},
+	} {
+		if got := knobLabel(secSampler, c.name); got != c.want {
+			t.Fatalf("knobLabel(sampler, %s) = %q(%q 예상)", c.name, got, c.want)
+		}
+	}
+	if got := knobLabel(secSampler, "CUTOFF"); got != "CUTOFF" {
+		t.Fatalf("표 밖 이름 %q(그대로 예상)", got)
+	}
+	if colPlateBand[7] != (color.NRGBA{R: 170, G: 90, B: 120, A: 255}) {
+		t.Fatalf("sampler 띠색 %v((170,90,120) 예상 — wire.py 틴트, 채색 병합 뒤 리드 실측 재핀)", colPlateBand[7])
 	}
 }
 
 // TestPolyTrigDot — 트리거 점 알파: 미점화 0, 점화 프레임 1, 150ms(9프레임) 뒤 < 0.1.
-// 시계 감쇠 이전 프레임(경계 이동 등)도 안전하게 1로 클램프.
+// 시계 감쇠 이전 프레임(경계 이동 등)도 안전하게 1로 클램프. P5-sampler부터 점 화살표는
+// 순수 함수 trigDotA(t, now)로 분리됐다(폴리·샘플러 공용).
 func TestPolyTrigDot(t *testing.T) {
 	h := newHarness(t)
-	if a := h.v.polyTrigA(h.ctx.Now); a != 0 {
+	if a := trigDotA(h.v.trigT[0], h.ctx.Now); a != 0 {
 		t.Fatalf("미점화 α = %v(0 예상)", a)
 	}
 	h.fb.tick.Flags = engine.FlagPoly
 	h.frame()
 	h.fb.tick.Flags = 0
-	if a := h.v.polyTrigA(h.ctx.Now); a != 1 {
+	if a := trigDotA(h.v.trigT[0], h.ctx.Now); a != 1 {
 		t.Fatalf("점화 프레임 α = %v(1 예상)", a)
 	}
-	if a := h.v.polyTrigA(h.ctx.Now - 0.05); a != 1 {
+	if a := trigDotA(h.v.trigT[0], h.ctx.Now-0.05); a != 1 {
 		t.Fatalf("감쇠 이전 경계 α = %v(1 클램프 예상)", a)
 	}
 	h.run(9) // 9 × 1/60 = 0.15s — e^−3 ≈ 0.0498
-	if a := h.v.polyTrigA(h.ctx.Now); a >= 0.1 {
+	if a := trigDotA(h.v.trigT[0], h.ctx.Now); a >= 0.1 {
 		t.Fatalf("150ms 뒤 α = %v(< 0.1 예상)", a)
 	}
 	h.run(60)
-	if a := h.v.polyTrigA(h.ctx.Now); a > 1.0/255 {
+	if a := trigDotA(h.v.trigT[0], h.ctx.Now); a > 1.0/255 {
 		t.Fatalf("2.5s 뒤 α = %v(사실상 0 예상)", a)
 	}
 }
 
-// TestPolyAbsentOldLayout — 방어 1: poly 노브·이름판이 없는 구(v3) 레이아웃에서도
-// newView는 성공해야 한다(폴백 경로는 KnobDevParam 실패 = 그냥 그 노브가 없을 뿐).
-// dev 노브 0개·poly 판 부재·스크롤 상한은 레이아웃 높이에서 유도되므로 그대로.
+// TestPolyAbsentOldLayout — 방어 1: 장치 로컬 섹션(poly·sampler) 노브·이름판·표시창이
+// 없는 구(v3) 레이아웃에서도 newView는 성공해야 한다(폴백 경로는 KnobDevParam 실패 =
+// 그냥 그 노브가 없을 뿐). dev 노브 0개·두 판 부재·스크롤 상한은 레이아웃 높이에서
+// 유도되므로 그대로. P5-sampler부터 두 섹션을 같이 뗀다(v5 이전 레이아웃은 폴리도 없다).
 func TestPolyAbsentOldLayout(t *testing.T) {
 	l, err := core.LoadDeviceLayout(assets.DeviceLayoutJSON)
 	if err != nil {
 		t.Fatalf("레이아웃 파싱: %v", err)
 	}
-	maxWithPoly := l.Size[1] - core.LogicalH
+	maxWithDev := l.Size[1] - core.LogicalH
 	knobs := make([]core.Knob, 0, len(l.Knobs))
 	for _, k := range l.Knobs {
-		if k.Section != "poly" {
+		if k.Section != "poly" && k.Section != "sampler" {
 			knobs = append(knobs, k)
 		}
 	}
 	l.Knobs = knobs
 	plates := make([]core.For, 0, len(l.Plates))
 	for _, p := range l.Plates {
-		if p.For != "poly" {
+		if p.For != "poly" && p.For != "sampler" {
 			plates = append(plates, p)
 		}
 	}
 	l.Plates = plates
+	disp := make([]core.For, 0, len(l.Displays))
+	for _, d := range l.Displays {
+		if d.For != "sampler" {
+			disp = append(disp, d)
+		}
+	}
+	l.Displays = disp
 	v, err := newView(l)
 	if err != nil {
-		t.Fatalf("poly 없는 레이아웃 newView: %v", err)
+		t.Fatalf("장치 섹션 없는 레이아웃 newView: %v", err)
 	}
 	for _, k := range v.knobs {
 		if k.dev {
 			t.Fatalf("dev 노브 잔존 %s", k.name)
 		}
 	}
-	if v.hasSection[secPoly-2] {
-		t.Fatal("poly 이름판이 없는데 hasSection[4] true")
+	if v.hasSection[secPoly-2] || v.hasSection[secSampler-2] {
+		t.Fatal("장치 이름판이 없는데 hasSection true")
 	}
-	if math.Abs(v.scrollMax-maxWithPoly) > 1e-9 {
-		t.Fatalf("scrollMax %v(%v 예상 — 높이 유도)", v.scrollMax, maxWithPoly)
+	if v.hasSmpDisp {
+		t.Fatal("sampler 표시창이 없는데 hasSmpDisp true")
+	}
+	if math.Abs(v.scrollMax-maxWithDev) > 1e-9 {
+		t.Fatalf("scrollMax %v(%v 예상 — 높이 유도)", v.scrollMax, maxWithDev)
 	}
 }
 

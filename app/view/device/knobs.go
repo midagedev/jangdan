@@ -3,9 +3,9 @@
 // 값 소스 계약: 잡히지 않은 노브는 매 프레임 Bridge.Param(레지던트·리플레이가 움직인 값),
 // 잡히거나 스윕 중인 노브는 로컬 값. SetParam은 값이 바뀔 때만, 노브당 프레임마다 최대 1개.
 //
-// 장치 로컬 노브(P5-poly, §14.1): 전역 ParamID가 아니라 (슬롯, k) 장치 파라미터를 움직인다.
-// dev 분기는 knobValue·sendParam 두 곳에만 있다 — 히트·드래그·스윕 상태기계는 전역 노브와
-// 같은 코드를 공유한다(구조 봉쇄: dev 가지가 흩어지지 않게).
+// 장치 로컬 노브(P5-poly·P5-sampler, §14.1): 전역 ParamID가 아니라 (슬롯, k) 장치 파라미터를
+// 움직인다. dev 분기는 knobValue·sendParam 두 곳에만 있다 — 히트·드래그·스윕 상태기계는 전역
+// 노브와 같은 코드를 공유한다(구조 봉쇄: dev 가지가 흩어지지 않게).
 package device
 
 import (
@@ -20,7 +20,7 @@ import (
 type knob struct {
 	name      string
 	label     string // 패널에 그리는 표시명(드럼·믹서·fx2는 내부명과 다르다 — knobLabel)
-	sec       uint8  // secBassA..secPoly
+	sec       uint8  // secBassA..secSampler
 	cx, cy, r float64
 	id        engine.ParamID
 
@@ -49,7 +49,9 @@ type knob struct {
 // 품고 있어 그대로 올리면 내부명이 노출된다 — 표시명(LEVEL)만 쓰고 보이스명은 패드 라벨이
 // 담당한다(비전 판정 2026-09-05 처방). 믹서·fx2(§13.3)는 버스 접두(REV_·CHO_)를 떼고
 // 나머지 밑줄은 공백(REV_BD→"BD", LEVEL_A→"LEVEL A", CHO_RATE→"RATE").
-// 폴리(P5-poly)는 노브 피치 80px의 r25 라벨판 폭에 맞춘 3~4자 축약 표.
+// 폴리(P5-poly)는 노브 피치 80px의 r25 라벨판 폭에 맞춘 3~4자 축약 표. 샘플러(P5-sampler)는
+// 폴리와 같은 피치·라벨판이라 같은 폭 예산 — ATTACK·RELEASE만 축약하고 나머지는 그대로
+// (SELECT·TUNE·START·LOOP·TONE·LEVEL은 이미 예산 안이다).
 // 나머지 섹션은 레이아웃 이름 그대로. 구성 시 1회라 무할당 규칙 밖이다.
 func knobLabel(sec uint8, name string) string {
 	switch sec {
@@ -74,6 +76,13 @@ func knobLabel(sec uint8, name string) string {
 			return "DET"
 		case "LEVEL":
 			return "LVL"
+		}
+	case secSampler:
+		switch name {
+		case "ATTACK":
+			return "ATK"
+		case "RELEASE":
+			return "REL"
 		}
 	}
 	return name
@@ -199,7 +208,7 @@ func (v *View) runSweeps(ctx *core.Ctx) {
 }
 
 // sendParam — 값 송신(노브당 프레임 최대 1회는 호출부가 보장). 전역 노브는 SetParam,
-// 장치 로컬 노브(P5-poly)는 DeviceParam(A=슬롯, B=k) — 드래그·탭 스윕 모두 이 경로뿐이다.
+// 장치 로컬 노브(폴리·샘플러)는 DeviceParam(A=슬롯, B=k) — 드래그·탭 스윕 모두 이 경로뿐이다.
 func (v *View) sendParam(ctx *core.Ctx, k *knob, val float32) {
 	if k.dev {
 		ctx.Bridge.Cmd(engine.Cmd{Kind: engine.DeviceParam, A: uint8(k.slot), B: uint8(k.k), V: val}, core.Human)

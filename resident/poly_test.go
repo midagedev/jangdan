@@ -54,13 +54,22 @@ func TestPolyEmission(t *testing.T) {
 		steps, params := 0, 0
 		for _, c := range tr.cmds {
 			switch c.Kind {
+			// 이 테스트는 **폴리의** 방출만 잰다 — 다른 장치 슬롯의 Cmd는 건너뛴다(2026-09-07
+			// P5-sampler-ui: 레지던트가 샘플러 슬롯에도 연주하면서, 슬롯 고정 단언이 남의 Cmd에
+			// 걸려 죽었다. 전 슬롯 공통 범위는 resident_test.go TestCmdRanges가 잰다).
 			case engine.DeviceStep:
-				if c.A != engine.SlotPoly || c.C%engine.NumDegrees != 0 || c.C > engine.MaxNote || c.D&^(pT|pGA) != 0 {
+				if c.A != engine.SlotPoly {
+					continue
+				}
+				if c.C%engine.NumDegrees != 0 || c.C > engine.MaxNote || c.D&^(pT|pGA) != 0 {
 					t.Fatalf("DeviceStep 범위 밖 %+v", c)
 				}
 				steps++
 			case engine.DeviceParam:
-				if c.A != engine.SlotPoly || c.B >= engine.DevParams || c.V < 0 || c.V > 1 {
+				if c.A != engine.SlotPoly {
+					continue
+				}
+				if c.B >= engine.DevParams || c.V < 0 || c.V > 1 {
 					t.Fatalf("DeviceParam 범위 밖 %+v", c)
 				}
 				params++
@@ -86,7 +95,7 @@ func TestPolyEmission(t *testing.T) {
 	}
 	first := 0
 	for _, c := range recs[0].cmds {
-		if c.Kind == engine.DeviceStep {
+		if c.Kind == engine.DeviceStep && c.A == engine.SlotPoly {
 			first++
 		}
 	}

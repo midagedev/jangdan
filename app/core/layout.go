@@ -217,25 +217,49 @@ var polyKnob = map[string]int{
 	"DECAY": engine.PolyDecay, "RELEASE": engine.PolyRelease, "DETUNE": engine.PolyDetune, "LEVEL": engine.PolyLevel,
 }
 
-// KnobDevParam — 장치 로컬 파라미터 노브(§14.1 DeviceParam): 섹션·이름 → (슬롯, k). 지금은 섹션
-// "poly"(슬롯 engine.SlotPoly)만. 알 수 없으면 false. KnobParam과 함께 UI↔엔진 매핑의 단일 소유자 —
-// 한 노브는 둘 중 하나에만 속한다(둘 다 false면 New가 레이아웃 오류로 거부한다).
+// samplerKnob — 섹션 "sampler" 노브 이름 → 장치 로컬 파라미터 k(engine/sampler.go 표).
+var samplerKnob = map[string]int{
+	"SELECT": engine.SmpSelect, "TUNE": engine.SmpTune, "START": engine.SmpStart, "LOOP": engine.SmpLoop,
+	"ATTACK": engine.SmpAttack, "RELEASE": engine.SmpRelease, "TONE": engine.SmpTone, "LEVEL": engine.SmpLevel,
+}
+
+// devSection — 장치 로컬 파라미터 섹션 레지스트리: 섹션 → (슬롯, 노브 이름→k 표). 세 번째 장치가
+// 오면 이곳에 한 줄 추가하는 것으로 끝난다.
+var devSection = map[string]struct {
+	slot int
+	knob map[string]int
+}{
+	"poly":    {engine.SlotPoly, polyKnob},
+	"sampler": {engine.SlotSampler, samplerKnob},
+}
+
+// KnobDevParam — 장치 로컬 파라미터 노브(§14.1 DeviceParam): 섹션·이름 → (슬롯, k). 알 수 없으면
+// false. KnobParam과 함께 UI↔엔진 매핑의 단일 소유자 — 한 노브는 둘 중 하나에만 속한다(둘 다
+// false면 New가 레이아웃 오류로 거부한다).
 func KnobDevParam(section, name string) (slot, k int, ok bool) {
-	if section != "poly" {
-		return 0, 0, false
-	}
-	k, ok = polyKnob[name]
+	ds, ok := devSection[section]
 	if !ok {
 		return 0, 0, false
 	}
-	return engine.SlotPoly, k, true
+	k, ok = ds.knob[name]
+	if !ok {
+		return 0, 0, false
+	}
+	return ds.slot, k, true
 }
 
 // DevParamDefault — 장치 로컬 파라미터 기본값(섀도 미러가 아직 없을 때 노브 표시 폴백). 슬롯 종류를
-// 모르므로 폴리 슬롯만 안다(SlotPoly 외 0).
+// 모르므로 레지스트리에 아는 슬롯만 안다(그 외 0).
 func DevParamDefault(slot, k int) float32 {
-	if slot == engine.SlotPoly && k >= 0 && k < engine.PolyParams {
-		return engine.DefaultPolyParams()[k]
+	switch slot {
+	case engine.SlotPoly:
+		if k >= 0 && k < engine.PolyParams {
+			return engine.DefaultPolyParams()[k]
+		}
+	case engine.SlotSampler:
+		if k >= 0 && k < engine.SmpParams {
+			return engine.DefaultSamplerParams()[k]
+		}
 	}
 	return 0
 }

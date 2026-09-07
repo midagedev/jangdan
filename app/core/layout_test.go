@@ -2,8 +2,9 @@
 // 전역 노브 47개 전부가 기대 ParamID와 정확히 일치하고, 매핑끼리 겹치지 않으며(서로 다른 두
 // 노브가 같은 파라미터를 움직이면 믹서 노브를 돌려도 다른 노브가 함께 움직인다),
 // 알 수 없는 이름은 (0,false)로 거짓을 돌려준다.
-// P5-poly: 레이아웃 v4에는 장치 로컬 poly 노브 8종이 추가됐다(총 55) — KnobDevParam 표는
-// TestKnobDevParamTable·TestDevParamDefault 소관이고, 여기선 두 표의 교집합 없음만 단언한다.
+// P5-poly: 레이아웃 v4에 장치 로컬 poly 노브 8종, P5-sampler: v5에 sampler 8종이 추가됐다
+// (총 63) — KnobDevParam 표는 TestKnobDevParamTable·TestDevParamDefault 소관이고, 여기선
+// 두 표의 교집합 없음만 단언한다.
 package core
 
 import (
@@ -85,16 +86,19 @@ func TestKnobParamFullTable(t *testing.T) {
 		seen[id] = key
 	}
 	// 레이아웃 JSON의 전역 노브 전부가 표와 정확히 일치(JSON이 바뀌면 여기가 먼저 빨간다).
-	// poly 8종은 장치 로컬 표 소관 — 전역 매핑이 아니라는 분리만 여기서 잰다.
+	// poly·sampler 8종씩은 장치 로컬 표 소관 — 전역 매핑이 아니라는 분리만 여기서 잰다.
+	// 제외 목록은 하드코딩이다: 세 번째 장치 섹션이 오면 이 분기를 지나 "표에 없음"으로
+	// 빨간다(제품 devSection을 그대로 쓰면 새 섹션이 자동으로 빠져 의도가 죽는다).
+	localSection := map[string]bool{"poly": true, "sampler": true}
 	l, err := LoadDeviceLayout(assets.DeviceLayoutJSON)
 	if err != nil {
 		t.Fatalf("레이아웃 파싱: %v", err)
 	}
 	n := 0
 	for _, k := range l.Knobs {
-		if k.Section == "poly" {
+		if localSection[k.Section] {
 			if _, ok := KnobParam(k.Section, k.Name); ok {
-				t.Fatalf("KnobParam이 poly 노브 %q를 전역에 매핑(단일 소유자 위반)", k.Name)
+				t.Fatalf("KnobParam이 %s 노브 %q를 전역에 매핑(단일 소유자 위반)", k.Section, k.Name)
 			}
 			continue
 		}
@@ -110,7 +114,7 @@ func TestKnobParamFullTable(t *testing.T) {
 		}
 	}
 	if n != len(wantKnob) {
-		t.Fatalf("전역 노브 %d개(표 %d항 — poly 제외 레이아웃 전부)", n, len(wantKnob))
+		t.Fatalf("전역 노브 %d개(표 %d항 — poly·sampler 제외 레이아웃 전부)", n, len(wantKnob))
 	}
 }
 
@@ -133,61 +137,87 @@ func TestKnobParamUnknown(t *testing.T) {
 	}
 }
 
-// wantDevKnob — 폴리 장치 로컬 노브 8종(P5-poly — §14.1)의 기대 k 매핑. 전역 47종과
-// 합쳐 레이아웃 v4의 55노브를 전부 덮는다(두 표의 교집합 없음 — 단일 소유자).
-var wantDevKnob = map[string]int{
-	"CUTOFF": engine.PolyCutoff, "RESO": engine.PolyReso, "ENV": engine.PolyEnvMod, "ATTACK": engine.PolyAttack,
-	"DECAY": engine.PolyDecay, "RELEASE": engine.PolyRelease, "DETUNE": engine.PolyDetune, "LEVEL": engine.PolyLevel,
+// wantDevSection — 장치 로컬 파라미터 섹션의 기대 매핑(P5-poly "poly", P5-sampler
+// "sampler" — §14.1): 섹션 → (슬롯, 파라미터 수, 노브 이름→k). 전역 47종과 합쳐 레이아웃
+// v5의 63노브를 전부 덮는다(두 표의 교집합 없음 — 단일 소유자).
+var wantDevSection = map[string]struct {
+	slot   int
+	params int
+	knob   map[string]int
+}{
+	"poly": {engine.SlotPoly, engine.PolyParams, map[string]int{
+		"CUTOFF": engine.PolyCutoff, "RESO": engine.PolyReso, "ENV": engine.PolyEnvMod, "ATTACK": engine.PolyAttack,
+		"DECAY": engine.PolyDecay, "RELEASE": engine.PolyRelease, "DETUNE": engine.PolyDetune, "LEVEL": engine.PolyLevel,
+	}},
+	"sampler": {engine.SlotSampler, engine.SmpParams, map[string]int{
+		"SELECT": engine.SmpSelect, "TUNE": engine.SmpTune, "START": engine.SmpStart, "LOOP": engine.SmpLoop,
+		"ATTACK": engine.SmpAttack, "RELEASE": engine.SmpRelease, "TONE": engine.SmpTone, "LEVEL": engine.SmpLevel,
+	}},
 }
 
 func TestKnobDevParamTable(t *testing.T) {
-	if len(wantDevKnob) != engine.PolyParams {
-		t.Fatalf("기대 표 %d항(%d 예상)", len(wantDevKnob), engine.PolyParams)
+	if len(wantDevSection) != len(devSection) {
+		t.Fatalf("기대 섹션 %d개(제품 레지스트리 %d개와 같아야 — 갱신 필요)", len(wantDevSection), len(devSection))
 	}
-	// k 중복 없음: 두 노브가 같은 장치 파라미터를 움직이면 한 노브를 돌려도 다른 노브가 함께 움직인다.
-	seen := make(map[int]string, len(wantDevKnob))
-	for name, k := range wantDevKnob {
-		if k < 0 || k >= engine.PolyParams {
-			t.Fatalf("%q → k %d(0..%d 범위 밖)", name, k, engine.PolyParams-1)
+	// 섹션별: k 중복 없음(두 노브가 같은 장치 파라미터를 움직이면 한 노브를 돌려도 다른 노브가
+	// 함께 움직인다)·레지스트리와 정확히 일치·전역 표와 교집합 없음.
+	for sec, want := range wantDevSection {
+		if _, ok := devSection[sec]; !ok {
+			t.Fatalf("기대 섹션 %q가 제품 레지스트리에 없음", sec)
 		}
-		if prev, dup := seen[k]; dup {
-			t.Fatalf("k %d 이중 매핑: %q ↔ %q", k, prev, name)
+		if want.slot < 0 || want.slot >= engine.RackSlots {
+			t.Fatalf("섹션 %q 슬롯 %d(0..%d 범위 밖)", sec, want.slot, engine.RackSlots-1)
 		}
-		seen[k] = name
-		slot, got, ok := KnobDevParam("poly", name)
-		if !ok || slot != engine.SlotPoly || got != k {
-			t.Fatalf("KnobDevParam(poly, %q) = (%d,%d,%v)((%d,%d,true) 예상)", name, slot, got, ok, engine.SlotPoly, k)
-		}
-		// 전역 표와의 교집합 없음 — 한 노브는 두 표 중 정확히 하나에 속한다.
-		if _, ok := KnobParam("poly", name); ok {
-			t.Fatalf("%q가 전역 KnobParam에도 매핑(단일 소유자 위반)", name)
+		seen := make(map[int]string, len(want.knob))
+		for name, k := range want.knob {
+			if k < 0 || k >= want.params {
+				t.Fatalf("%s/%q → k %d(0..%d 범위 밖)", sec, name, k, want.params-1)
+			}
+			if prev, dup := seen[k]; dup {
+				t.Fatalf("k %d 이중 매핑: %q ↔ %q", k, prev, name)
+			}
+			seen[k] = name
+			slot, got, ok := KnobDevParam(sec, name)
+			if !ok || slot != want.slot || got != k {
+				t.Fatalf("KnobDevParam(%q,%q) = (%d,%d,%v)((%d,%d,true) 예상)", sec, name, slot, got, ok, want.slot, k)
+			}
+			// 전역 표와의 교집합 없음 — 한 노브는 두 표 중 정확히 하나에 속한다.
+			if _, ok := KnobParam(sec, name); ok {
+				t.Fatalf("%q가 전역 KnobParam에도 매핑(단일 소유자 위반)", name)
+			}
 		}
 	}
-	// 레이아웃의 poly 노브는 이 표와 정확히 1:1(JSON이 바뀌면 여기가 먼저 빨간다).
+	// 레이아웃의 장치 로컬 노브는 소속 섹션 표와 정확히 1:1(JSON이 바뀌면 여기가 먼저 빨간다).
 	l, err := LoadDeviceLayout(assets.DeviceLayoutJSON)
 	if err != nil {
 		t.Fatalf("레이아웃 파싱: %v", err)
 	}
-	poly := 0
+	got := map[string]int{}
 	for _, k := range l.Knobs {
-		if k.Section != "poly" {
+		want, ok := wantDevSection[k.Section]
+		if !ok {
 			continue
 		}
-		poly++
-		want, ok := wantDevKnob[k.Name]
+		got[k.Section]++
+		wk, ok := want.knob[k.Name]
 		if !ok {
-			t.Fatalf("poly 노브 %q가 기대 표에 없음 — 표 갱신 필요", k.Name)
+			t.Fatalf("%s 노브 %q가 기대 표에 없음 — 표 갱신 필요", k.Section, k.Name)
 		}
-		if _, got, ok := KnobDevParam(k.Section, k.Name); !ok || got != want {
-			t.Fatalf("KnobDevParam(%q,%q) k = (%d,%v)(%d,true 예상)", k.Section, k.Name, got, ok, want)
+		if _, g, ok := KnobDevParam(k.Section, k.Name); !ok || g != wk {
+			t.Fatalf("KnobDevParam(%q,%q) k = (%d,%v)(%d,true 예상)", k.Section, k.Name, g, ok, wk)
 		}
 	}
-	if poly != len(wantDevKnob) {
-		t.Fatalf("레이아웃 poly 노브 %d개(표 %d항)", poly, len(wantDevKnob))
+	for sec, want := range wantDevSection {
+		if got[sec] != len(want.knob) {
+			t.Fatalf("레이아웃 %s 노브 %d개(표 %d항)", sec, got[sec], len(want.knob))
+		}
 	}
-	// 모르는 이름·다른 섹션 → false(newView의 레이아웃 오류 경로). 전역 이름·대소문자 변주도 매핑이 아니다.
+	// 모르는 이름·다른 섹션 → false(newView의 레이아웃 오류 경로). 전역 이름·대소문자 변주,
+	// 섹션 간 이름 혼용(폴리 "ATTACK"을 샘플러에)도 매핑이 아니다.
 	for _, c := range [][2]string{
 		{"poly", "TEMPO"}, {"poly", "CUTOFF2"}, {"poly", ""}, {"poly", "cutoff"},
+		{"sampler", "SELECT2"}, {"sampler", "CUTOFF"}, {"sampler", "select"},
+		{"poly", "SELECT"}, {"sampler", "DETUNE"},
 		{"fx", "CUTOFF"}, {"mixer", "LEVEL"}, {"basslineA", "ATTACK"}, {"", "CUTOFF"},
 	} {
 		if slot, k, ok := KnobDevParam(c[0], c[1]); ok {
@@ -197,15 +227,21 @@ func TestKnobDevParamTable(t *testing.T) {
 }
 
 func TestDevParamDefault(t *testing.T) {
-	// 폴리 슬롯: 엔진 기본값 표와 정확히 일치 — 표시 폴백(미러 부재)이 엔진 Reset과 같은 값을 준다.
+	// 아는 슬롯: 엔진 기본값 표와 정확히 일치 — 표시 폴백(미러 부재)이 엔진 Reset과 같은 값을 준다.
 	def := engine.DefaultPolyParams()
 	for k := 0; k < engine.PolyParams; k++ {
 		if got := DevParamDefault(engine.SlotPoly, k); got != def[k] {
 			t.Fatalf("DevParamDefault(SlotPoly,%d) = %v(%v 예상)", k, got, def[k])
 		}
 	}
+	sdef := engine.DefaultSamplerParams()
+	for k := 0; k < engine.SmpParams; k++ {
+		if got := DevParamDefault(engine.SlotSampler, k); got != sdef[k] {
+			t.Fatalf("DevParamDefault(SlotSampler,%d) = %v(%v 예상)", k, got, sdef[k])
+		}
+	}
 	// 범위 밖 방어: 다른 슬롯·k 경계 밖은 0 — knobValue의 NaN/음수 폴백이 변칙 값을 만들지 않는다.
-	for _, c := range [][2]int{{engine.SlotBassA, 0}, {engine.SlotPoly, engine.PolyParams}, {engine.SlotPoly, -1}, {engine.SlotPoly + 1, 0}, {-1, 0}} {
+	for _, c := range [][2]int{{engine.SlotBassA, 0}, {engine.SlotPoly, engine.PolyParams}, {engine.SlotPoly, -1}, {engine.SlotSampler, engine.SmpParams}, {engine.SlotSampler, -1}, {engine.SlotSampler + 1, 0}, {-1, 0}} {
 		if got := DevParamDefault(c[0], c[1]); got != 0 {
 			t.Fatalf("DevParamDefault(%d,%d) = %v(0 예상)", c[0], c[1], got)
 		}

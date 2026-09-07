@@ -66,8 +66,8 @@ var (
 	// (200,110,40)/나머지 (120,80,50))은 페인팅에 남아 있지 않고, 그대로 쓰면 R max/min 게이트(≤1.3)를
 	// 깬다(200/120=1.67) — 측정 중앙값 단일색으로 통일(보고서 참조).
 	colStepFace = color.NRGBA{0x92, 0x5E, 0x3B, 0xFF} // #925E3B = (146,94,59) — 16스텝 버튼 면 공통
-	// 이름판 좌측 밴드 패치색 — bassA·bassB·drums·fx·mixer·fx2·poly 순. 판 내부 중앙값(테두리·잔글자 제외 영역).
-	colPlateBand = [7]color.NRGBA{
+	// 이름판 좌측 밴드 패치색 — bassA·bassB·drums·fx·mixer·fx2·poly·sampler 순. 판 내부 중앙값(테두리·잔글자 제외 영역).
+	colPlateBand = [8]color.NRGBA{
 		{0xDB, 0xD3, 0xBF, 0xFF}, // (219,211,191)
 		{0xDB, 0xD3, 0xBF, 0xFF}, // (219,211,191)
 		{0xDA, 0xD0, 0xB6, 0xFF}, // (218,208,182)
@@ -78,6 +78,9 @@ var (
 		// P5-poly: 패널은 아직 와이어프레임(그림 라운드가 panel.png를 칠한다) — wire.py 섹션
 		// 띠 틴트 (60,130,170)를 임시로 쓰고, 채색 병합 뒤 리드가 패널 실측 중앙값으로 재조정한다.
 		{0x2A, 0x85, 0xB2, 0xFF}, // poly (42,133,178) — 채택 패널(seed 7 y1790) 띠 중앙값 실측
+		// P5-sampler: 같은 사정 — wire.py 섹션 띠 틴트 (170,90,120)을 임시로 쓰고, 채색 병합 뒤
+		// 리드가 패널 실측 중앙값으로 재조정한다(poly 재핀 관례).
+		{0xAA, 0x5A, 0x78, 0xFF}, // sampler (170,90,120) — 와이어프레임 띠색, 실측 재핀 대기
 	}
 	// 베이스라인 표시창 창색 — 창 청정부(하단 20px) 중앙값. 불투명 채움으로 페인팅 잔글자("68."류)를 차단.
 	colDispWin = [2]color.NRGBA{
@@ -104,16 +107,17 @@ const (
 	dispBottomScale   = 0.6
 )
 
-// 섹션 인덱스. mixer·fx2는 P4-scroll 랙 확장(§13.3), poly는 P5-poly(§14.1) —
-// 스크롤 없이는 화면에 없다.
+// 섹션 인덱스. mixer·fx2는 P4-scroll 랙 확장(§13.3), poly는 P5-poly(§14.1),
+// sampler는 P5-sampler(§14.1) — 스크롤 없이는 화면에 없다.
 const (
-	secBassA = 0
-	secBassB = 1
-	secDrums = 2
-	secFx    = 3
-	secMixer = 4
-	secFx2   = 5
-	secPoly  = 6
+	secBassA   = 0
+	secBassB   = 1
+	secDrums   = 2
+	secFx      = 3
+	secMixer   = 4
+	secFx2     = 5
+	secPoly    = 6
+	secSampler = 7
 )
 
 const numBassSecBtns = 10 // 베이스라인 섹션 버튼(saw..patD) 수
@@ -171,6 +175,14 @@ type bottomDisp struct {
 	dirty    bool
 }
 
+// smpDisp — 샘플러 팩 슬롯 표시창 캐시(P5-sampler): 현재 SELECT 인덱스의 팩 이름. 이름의
+// 단일 소유자는 엔진(engine.PackNames) — 뷰는 참조만 담는다. 인덱스가 변화할 때만 재구성.
+type smpDisp struct {
+	idx   int32
+	text  string
+	dirty bool
+}
+
 // View — 기기 뷰. New(이미지 있는 제품 경로)과 newView(레이아웃만 — 테스트)로 만든다.
 type View struct {
 	layout *core.DeviceLayout
@@ -189,13 +201,15 @@ type View struct {
 	hasTitle      bool
 	bassPlates    [2]core.Rect
 	hasBassPlate  [2]bool
-	sectionPlates [5]core.Rect // drums·fx·mixer·fx2·poly 이름판(라벨용)
-	hasSection    [5]bool
+	sectionPlates [6]core.Rect // drums·fx·mixer·fx2·poly·sampler 이름판(라벨·트리거 점용)
+	hasSection    [6]bool
 
-	dispRects [2]core.Rect
-	hasDisp   [2]bool
-	scopeRect core.Rect
-	botRect   core.Rect
+	dispRects   [2]core.Rect
+	hasDisp     [2]bool
+	smpDispRect core.Rect // 샘플러 팩 슬롯 표시창(P5-sampler)
+	hasSmpDisp  bool
+	scopeRect   core.Rect
+	botRect     core.Rect
 
 	chordRect     core.Rect // 코드 트랙 띠(§12.3)
 	chordCells    [engine.ChordBars]core.Rect
@@ -211,7 +225,7 @@ type View struct {
 	nptrs int
 
 	// 스크롤 랙(§13.3 — 상태·입력·그리기 전부 scroll.go가 소유한다). rack은 New에서
-	// 1회 만드는 레이아웃 크기(720×2000, v4) 오프스크린 — Draw 본문을 전부 여기에 그린 뒤
+	// 1회 만드는 레이아웃 크기(720×2220, v5) 오프스크린 — Draw 본문을 전부 여기에 그린 뒤
 	// scrollY만큼 올려 화면에 blit한다. sptrs는 포인터의 화면 좌표 사본(ctx.Pointers는
 	// 재사용 슬라이스라 수정 금지) — 제스처는 화면 좌표계로 재고, 레이아웃 좌표 변환
 	// (y+scrollY)의 단일 소유자는 press()의 히트 판정이다(scroll.go 헤더 참조).
@@ -223,8 +237,10 @@ type View struct {
 	sptrs           [8]core.Pointer
 	disp            [2]bassDisp
 	bottom          bottomDisp
-	meters          meters  // 라인 VU 밸리스틱(P3-meters) — 파트 8 + 마스터
-	polyTrigT       float64 // 폴리 트리거 점 최종 점화 시각(ctx.Now, −1 = 미점화 — P5-poly)
+	smpDisp         smpDisp    // 샘플러 팩 슬롯 표시창 캐시(P5-sampler)
+	smpSel          int        // SELECT 노브의 v.knobs 인덱스(-1 = 레이아웃에 없음 — 구 레이아웃 방어)
+	meters          meters     // 라인 VU 밸리스틱(P3-meters) — 파트 8 + 마스터
+	trigT           [2]float64 // 트리거 점 최종 점화 시각(ctx.Now, −1 = 미점화). [0]=폴리(FlagPoly), [1]=샘플러(FlagSampler)
 
 	// 뒷면 케이블 뷰(§14.3, P5-back-view — 상태·입력·그리기 전부 back.go가 소유한다;
 	// scroll.go 관례: 이곳에는 필드 선언만). rearImg는 New에서만 디코드(newView 경로 nil).
@@ -269,11 +285,11 @@ type View struct {
 	spriteCls  []float64
 	ledImg     [3]*ebiten.Image // on/mid/off
 	padLEDImg  *ebiten.Image    // 패드 라인 LED 점 r4(P3-meters) — newView(테스트)에서는 nil
-	polyDotImg *ebiten.Image    // 폴리 트리거 점 r4(P5-poly) — newView(테스트)에서는 nil
+	trigDotImg *ebiten.Image    // 트리거 점 r4(폴리·샘플러 공용 — P5-poly, newView에서는 nil)
 	ledR       float64
 	white1     *ebiten.Image
 	black1     *ebiten.Image
-	dispImg    [3]*ebiten.Image // bassA·bassB·하단
+	dispImg    [4]*ebiten.Image // bassA·bassB·하단·샘플러 팩
 	labelLayer *ebiten.Image
 	layersOK   bool
 
@@ -305,7 +321,7 @@ func New(ctx *core.Ctx) (*View, error) {
 		return nil, fmt.Errorf("device: 패널 디코드: %w", err)
 	}
 	v.panel = ebiten.NewImageFromImage(img)
-	// 랙 오프스크린(레이아웃 크기 = 720×2000, v4) — 스크롤 blit의 원본 한 장. 여기서만 만든다.
+	// 랙 오프스크린(레이아웃 크기 = 720×2220, v5) — 스크롤 blit의 원본 한 장. 여기서만 만든다.
 	v.rack = ebiten.NewImage(int(l.Size[0]), int(l.Size[1]))
 	// 뒷면 패널(§14.3) — 아직 와이어프레임이지만 있는 그대로 그린다(룩 판단은 아트 라운드).
 	img, _, err = image.Decode(bytes.NewReader(mustAsset("device/rear.png")))
@@ -350,8 +366,8 @@ func New(ctx *core.Ctx) (*View, error) {
 	v.ledImg[0] = ebiten.NewImageFromImage(ledCircle(maxR, colLEDOn))
 	v.ledImg[1] = ebiten.NewImageFromImage(ledCircle(maxR, colLEDMid))
 	v.ledImg[2] = ebiten.NewImageFromImage(ledCircle(maxR, colLEDOff))
-	v.padLEDImg = ebiten.NewImageFromImage(ledCircle(padLEDR, colLEDOn))  // 패드 라인 LED 점(P3-meters)
-	v.polyDotImg = ebiten.NewImageFromImage(ledCircle(polyTrigR, colLCD)) // 폴리 트리거 점(P5-poly)
+	v.padLEDImg = ebiten.NewImageFromImage(ledCircle(padLEDR, colLEDOn)) // 패드 라인 LED 점(P3-meters)
+	v.trigDotImg = ebiten.NewImageFromImage(ledCircle(trigDotR, colLCD)) // 트리거 점(폴리·샘플러 공용)
 	v.white1 = ebiten.NewImageFromImage(solid1x1(color.NRGBA{0xFF, 0xFF, 0xFF, 0xFF}))
 	v.black1 = ebiten.NewImageFromImage(solid1x1(color.NRGBA{0, 0, 0, 0xFF}))
 	v.initStrokeOpts()
@@ -360,7 +376,9 @@ func New(ctx *core.Ctx) (*View, error) {
 
 // newView — 레이아웃만 파싱해 컨트롤 인덱스를 구축한다(이미지 없음 — 유닛 테스트 경로).
 func newView(l *core.DeviceLayout) (*View, error) {
-	v := &View{layout: l, selPart: engine.BassA, fxPlay: -1, fxRec: -1, harmonyOK: true, polyTrigT: -1, rejT: -1}
+	v := &View{layout: l, selPart: engine.BassA, fxPlay: -1, fxRec: -1, harmonyOK: true, smpSel: -1, rejT: -1}
+	v.trigT[0], v.trigT[1] = -1, -1
+	v.smpDisp.idx = -1
 	v.disp[0].knob, v.disp[1].knob = -1, -1
 	for s := 0; s < 2; s++ {
 		for j := range v.secLEDs[s] {
@@ -371,14 +389,14 @@ func newView(l *core.DeviceLayout) (*View, error) {
 		v.fxLEDs[i] = -1
 	}
 
-	secOf := map[string]uint8{"basslineA": secBassA, "basslineB": secBassB, "drums": secDrums, "fx": secFx, "mixer": secMixer, "fx2": secFx2, "poly": secPoly}
+	secOf := map[string]uint8{"basslineA": secBassA, "basslineB": secBassB, "drums": secDrums, "fx": secFx, "mixer": secMixer, "fx2": secFx2, "poly": secPoly, "sampler": secSampler}
 	for _, k := range l.Knobs {
 		sec, ok := secOf[k.Section]
 		if !ok {
 			return nil, fmt.Errorf("device: 노브 %q의 알 수 없는 섹션 %q", k.Name, k.Section)
 		}
 		kn := knob{name: k.Name, label: knobLabel(sec, k.Name), sec: sec, cx: k.CX, cy: k.CY, r: k.R}
-		// 매핑 3단계: 전역 ParamID → 장치 로컬(§14.1 DeviceParam — 지금은 poly 8종) → 매핑
+		// 매핑 3단계: 전역 ParamID → 장치 로컬(§14.1 DeviceParam — poly 8종·sampler 8종) → 매핑
 		// 없음은 레이아웃 오류(기존 계약 유지). dev 노브의 id는 0으로 남지만 쓰는 경로가
 		// 없다(knobValue·sendParam이 dev 분기 — JustGrabbed는 dev 노브를 보고하지 않는다).
 		if id, ok := core.KnobParam(k.Section, k.Name); ok {
@@ -387,6 +405,10 @@ func newView(l *core.DeviceLayout) (*View, error) {
 			kn.dev, kn.slot, kn.k = true, slot, dk
 		} else {
 			return nil, fmt.Errorf("device: 노브 %q/%q의 파라미터 매핑 없음", k.Section, k.Name)
+		}
+		// 샘플러 SELECT는 팩 표시창 문자열의 값 소스 — 노브 테이블 인덱스를 물어 둔다.
+		if sec == secSampler && k.Name == "SELECT" {
+			v.smpSel = len(v.knobs)
 		}
 		v.knobs = append(v.knobs, kn)
 	}
@@ -461,6 +483,8 @@ func newView(l *core.DeviceLayout) (*View, error) {
 			v.sectionPlates[3], v.hasSection[3] = pl.Rect, true
 		case "poly": // P5-poly — 트리거 점(draw.go)과 라벨이 이 판 rect를 쓴다
 			v.sectionPlates[4], v.hasSection[4] = pl.Rect, true
+		case "sampler": // P5-sampler — 트리거 점·라벨이 이 판 rect를 쓴다(폴리와 같은 관례)
+			v.sectionPlates[5], v.hasSection[5] = pl.Rect, true
 		}
 	}
 	for _, d := range l.Displays {
@@ -469,6 +493,8 @@ func newView(l *core.DeviceLayout) (*View, error) {
 			v.dispRects[0], v.hasDisp[0] = d.Rect, true
 		case "basslineB":
 			v.dispRects[1], v.hasDisp[1] = d.Rect, true
+		case "sampler": // P5-sampler — 팩 슬롯 이름 표시창(이름은 engine.PackNames에서)
+			v.smpDispRect, v.hasSmpDisp = d.Rect, true
 		}
 	}
 	v.scopeRect = l.Scope.Rect
@@ -644,10 +670,12 @@ func (v *View) Update(ctx *core.Ctx) {
 	v.rearFrame(ctx) // 뒷면(§14.3) — 관측 카운터 리셋 + 케이블 표 동기화(이 프레임 송신의 판정 포함)
 	v.chordIdleClose(ctx.Now)
 	v.meters.update(ctx.Tick, float32(ctx.DT))
-	// 폴리 트리거 점(P5-poly): FlagPoly 프레임에 점화 시각을 래치 — 감쇠 계산은 그리기 쪽
-	// (polyTrigA). 비교·대입뿐이라 무할당 계약 안.
-	if ctx.Tick.Flags&engine.FlagPoly != 0 {
-		v.polyTrigT = ctx.Now
+	// 트리거 점(P5-poly·P5-sampler): 장치 플래그 프레임에 점화 시각을 래치 — 감쇠 계산은
+	// 그리기 쪽(trigDotA). 비교·대입뿐이라 무할당 계약 안.
+	for i, flag := range [2]uint32{engine.FlagPoly, engine.FlagSampler} {
+		if ctx.Tick.Flags&flag != 0 {
+			v.trigT[i] = ctx.Now
+		}
 	}
 	v.cacheChord(ctx)
 	v.cacheDisplays(ctx)
@@ -864,6 +892,21 @@ func (v *View) cacheDisplays(ctx *core.Ctx) {
 				d.dirty = true
 				v.rebuilds++
 			}
+		}
+	}
+	// 샘플러 팩 슬롯 표시창(P5-sampler): SELECT 노브 값 → 현재 팩 이름(engine.PackNames —
+	// 이름의 단일 소유자는 엔진이다). 인덱스 유도는 엔진과 같은 식(engine/sampler.go SmpSelect
+	// = int(mul32(q,7)+0.5) — q는 knobValue 경유로 언제나 0..1이라 0..7). 값이 변화할 때만
+	// 문자열을 다시 참조해 dirty(팩 이름은 불변 리터럴이라 재구성 비용이 참조 대입뿐이다).
+	// 하단 표시창의 무변화 조기 return **앞**에 둔다 — 그 뒤면 정지 프레임에 갱신이 죽는다.
+	if v.smpSel >= 0 {
+		q := v.knobValue(ctx, &v.knobs[v.smpSel])
+		idx := int32(float64(q)*7 + 0.5)
+		if idx != v.smpDisp.idx {
+			v.smpDisp.idx = idx
+			v.smpDisp.text = engine.PackNames[idx]
+			v.smpDisp.dirty = true
+			v.rebuilds++
 		}
 	}
 	key := int32(v.bridgeKey(ctx.Bridge))

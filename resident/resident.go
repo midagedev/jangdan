@@ -226,6 +226,7 @@ func (r *Resident) onBar(in Input) {
 	}
 	if phaseEntry { // 폴리 리드 리듬·음색(poly.go) — 화성 잠금과 무관(음은 엔진이 코드 트랙에서 읽는다)
 		r.emitPoly(ph)
+		r.emitSampler(ph)
 	}
 
 	// 패턴 재생성: 페이즈 진입 또는 마지막 재생성에서 8바.

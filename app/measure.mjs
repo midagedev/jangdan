@@ -35,6 +35,35 @@ if (!fs.existsSync(path.join(web, 'app.wasm'))) {
   process.exit(1);
 }
 
+// 빌드 신선도 — app/web/ 은 **빌드 산출물**이고 계측은 그것을 잰다. 소스가 더 새로우면 계측은
+// 옛 앱을 재고 초록을 보고한다. 2026-09-07 실측: 패널·레이아웃을 720×2220으로 바꾼 뒤 measure가
+// 두 번 전부 OK를 냈는데, 서빙된 것은 채택 전 720×2000이었다 — 브라우저를 눈으로 보고서야 알았다
+// (랙이 폴리까지만 스크롤됐다). "계측기를 한 번 의심한다"가 바로 이 자리다.
+{
+  const newest = (dir, skip = () => false) => {
+    let t = 0;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (skip(p)) continue;
+      t = Math.max(t, e.isDirectory() ? newest(p, skip) : fs.statSync(p).mtimeMs);
+    }
+    return t;
+  };
+  const built = fs.statSync(path.join(web, 'app.wasm')).mtimeMs;
+  const skipWeb = (p) => p.startsWith(web);            // 산출물 자신은 소스가 아니다
+  const src = Math.max(
+    newest(here, (p) => skipWeb(p) || p.includes('node_modules') || p.includes('/results')),
+    newest(path.join(here, '..', 'engine')),
+    newest(path.join(here, '..', 'resident')),
+    newest(path.join(here, '..', 'session')),
+  );
+  if (src > built + 1000) {
+    console.error(`app/web/ 빌드가 소스보다 낡았다(${new Date(built).toISOString()} < ${new Date(src).toISOString()}) — `
+      + '먼저 `bash app/build.sh`. 이 상태로 잰 수치는 옛 앱의 것이다.');
+    process.exit(1);
+  }
+}
+
 // --- playwright 로딩: app/node_modules → NODE_PATH → spike/worklet 재사용(상대 import) ---
 async function loadPlaywright() {
   try {

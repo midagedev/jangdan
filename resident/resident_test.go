@@ -326,6 +326,10 @@ func TestSetParamBudget(t *testing.T) {
 
 // ---- 계약 8: Cmd 범위·반환 수 상한 ----
 
+// playedSlot — 레지던트가 연주하는 장치 슬롯인가. 새 장치를 연주하기 시작하면 여기 한 줄이다
+// (2026-09-07: 슬롯 고정 리터럴 `c.A != engine.SlotPoly`가 샘플러 방출에 걸려 죽었다).
+func playedSlot(a uint8) bool { return a == engine.SlotPoly || a == engine.SlotSampler }
+
 func TestCmdRanges(t *testing.T) {
 	barDur := barDurOf(Rush)
 	r := New(0xABCDEF, Rush, Config{}) // 기본 포모도로(전이·드롭 국면 포함)
@@ -371,12 +375,14 @@ func TestCmdRanges(t *testing.T) {
 				}
 			case engine.Drop:
 				// 필드 없음
-			case engine.DeviceStep: // 폴리 리드(poly.go): 슬롯 고정·옥타브 note·게이트/타이/액센트
-				if c.A != engine.SlotPoly || c.B > 15 || c.C > engine.MaxNote || c.D & ^uint8(engine.StepGate|engine.StepSlide|engine.StepAccent) != 0 {
+			// 레지던트가 연주하는 장치 슬롯(폴리·샘플러). 장치별 세부 계약(폴리는 옥타브만·
+			// 샘플러는 도수 {0,2,4})은 각 장치 테스트가 잰다 — 여기서는 전 슬롯 공통 범위만.
+			case engine.DeviceStep:
+				if !playedSlot(c.A) || c.B > 15 || c.C > engine.MaxNote || c.D & ^uint8(engine.StepGate|engine.StepSlide|engine.StepAccent) != 0 {
 					t.Fatalf("DeviceStep 범위 밖: %+v", c)
 				}
 			case engine.DeviceParam:
-				if c.A != engine.SlotPoly || c.B >= engine.DevParams || c.V < 0 || c.V > 1 || c.V != c.V {
+				if !playedSlot(c.A) || c.B >= engine.DevParams || c.V < 0 || c.V > 1 || c.V != c.V {
 					t.Fatalf("DeviceParam 범위 밖: %+v", c)
 				}
 			default:

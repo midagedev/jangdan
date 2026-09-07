@@ -1,12 +1,13 @@
 // draw.go — 그리기 전부. Draw는 Cmd를 보내지 않는다.
 //
-// 프레임당 드로잉 예산: DrawImage ≤ 208회(패널 1 + 라벨 레이어 1 + 노브 55 — P4-scroll
-// 믹서 12·fx2 6·P5-poly 폴리 8 추가 + LED 36 + 랙 blit 1 + 인디케이터 ≤ 1 — P4-scroll +
-// 표시창 3 + 오버레이 ≤ 14 + 코드 트랙 띠 채움 ≤ 2·글리프 ≈ 24 + VU 세그먼트 ≤ 44 + 패드
-// LED 점 ≤ 6 — P3-meters, 레벨 0이면 미터 0 + 폴리 트리거 점 ≤ 1 — P5-poly), vector 호출
-// 1회(스코프 폴리라인). 정적 라벨·스텝 버튼 면 16개·이름판 밴드 패치·코드 트랙 셀 외곽선
-// 8개(1px×4변)는 첫 프레임에 레이아웃 크기(720×2000, v4) 오프스크린 한 장(labelLayer)로
-// 합성해 매 프레임 1회 blit한다(프레임당 추가 비용 0). 옵션·버퍼는 전부 재사용.
+// 프레임당 드로잉 예산: DrawImage ≤ 218회(패널 1 + 라벨 레이어 1 + 노브 63 — P4-scroll
+// 믹서 12·fx2 6·P5-poly 폴리 8·P5-sampler 샘플러 8 추가 + LED 36 + 랙 blit 1 +
+// 인디케이터 ≤ 1 — P4-scroll + 표시창 4 + 오버레이 ≤ 14 + 코드 트랙 띠 채움 ≤ 2·글리프
+// ≈ 24 + VU 세그먼트 ≤ 44 + 패드 LED 점 ≤ 6 — P3-meters, 레벨 0이면 미터 0 + 트리거 점
+// ≤ 2 — 폴리·샘플러, P5), vector 호출 1회(스코프 폴리라인). 정적 라벨·스텝 버튼 면
+// 16개·이름판 밴드 패치·코드 트랙 셀 외곽선 8개(1px×4변)는 첫 프레임에 레이아웃 크기
+// (720×2220, v5) 오프스크린 한 장(labelLayer)로 합성해 매 프레임 1회 blit한다(프레임당
+// 추가 비용 0). 옵션·버퍼는 전부 재사용.
 package device
 
 import (
@@ -63,7 +64,7 @@ func (v *View) Draw(screen *ebiten.Image, ctx *core.Ctx) {
 	v.drawScrollInd(screen, ctx)
 }
 
-// drawRack — Draw 본문. dst는 제품 경로 rack(레이아웃 크기, v4 720×2000) 또는 헤드리스 폴백 screen.
+// drawRack — Draw 본문. dst는 제품 경로 rack(레이아웃 크기, v5 720×2220) 또는 헤드리스 폴백 screen.
 func (v *View) drawRack(dst *ebiten.Image, ctx *core.Ctx) {
 	v.ensureLayers(ctx)
 	v.op.GeoM.Reset()
@@ -76,7 +77,13 @@ func (v *View) drawRack(dst *ebiten.Image, ctx *core.Ctx) {
 	v.drawLEDs(dst, ctx)
 	v.drawKnobs(dst, ctx)
 	v.drawOverlays(dst, ctx)
-	v.drawPolyTrig(dst, ctx)
+	// 트리거 점(§14.1 — 폴리 FlagPoly·샘플러 FlagSampler): 각자 섹션 이름판 오른쪽 끄트막.
+	if v.hasSection[secPoly-2] {
+		v.drawTrigDot(dst, ctx.Now, v.trigT[0], v.sectionPlates[secPoly-2])
+	}
+	if v.hasSection[secSampler-2] {
+		v.drawTrigDot(dst, ctx.Now, v.trigT[1], v.sectionPlates[secSampler-2])
+	}
 	v.drawChordTrack(dst, ctx)
 	v.drawDisplays(dst, ctx)
 	v.drawMeters(dst, ctx)
@@ -99,7 +106,7 @@ func (v *View) ensureLayers(ctx *core.Ctx) {
 			v.fillRect(v.labelLayer, core.Rect{r[0], r[1], plateBandW, r[3]}, colPlateBand[s])
 		}
 	}
-	for s := 0; s < len(v.sectionPlates); s++ { // drums·fx·mixer·fx2(P4-scroll)
+	for s := 0; s < len(v.sectionPlates); s++ { // drums·fx·mixer·fx2·poly·sampler — 배열 길이가 목록이다
 		if v.hasSection[s] {
 			r := v.sectionPlates[s]
 			v.fillRect(v.labelLayer, core.Rect{r[0], r[1], plateBandW, r[3]}, colPlateBand[s+2])
@@ -131,7 +138,7 @@ func (v *View) ensureLayers(ctx *core.Ctx) {
 	for i := range v.knobs {
 		k := &v.knobs[i]
 		dy := float64(knobDyMain)
-		if k.sec == secDrums || k.sec == secMixer || k.sec == secPoly { // r25 노브는 행 간격이 좁아 라벨을 붙인다
+		if k.sec == secDrums || k.sec == secMixer || k.sec == secPoly || k.sec == secSampler { // r25 노브는 행 간격이 좁아 라벨을 붙인다
 			dy = knobDyDrums
 		}
 		// 어두운 잉크: 라벨판이 밝은 크림이라 크림 라벨은 안 보였다(비전 처방).
@@ -163,8 +170,9 @@ func (v *View) ensureLayers(ctx *core.Ctx) {
 		f.Draw(v.labelLayer, "JANGDAN", cx+titleShiftX, cy, labelTitleScale, colInk, core.AlignCenter)
 	}
 	// 섹션 이름판: 왼쪽 정렬(+plateInset), 세로 중앙(y = cy − h/2). 폰트가 ASCII라 구분자는 asciiSep로 대체.
-	// 크림판 위 크림 라벨은 안 보였다 — 어두운 잉크(비전 처방). mixer·fx2 판은 P4-scroll, poly는 P5-poly 추가.
-	for i, txt := range [5]string{"DRUMS", "FX" + asciiSep + "SEQ", "MIXER", "FX 2", "POLY"} {
+	// 크림판 위 크림 라벨은 안 보였다 — 어두운 잉크(비전 처방). mixer·fx2 판은 P4-scroll, poly는
+	// P5-poly, sampler는 P5-sampler 추가.
+	for i, txt := range [6]string{"DRUMS", "FX" + asciiSep + "SEQ", "MIXER", "FX 2", "POLY", "SAMPLER"} {
 		if !v.hasSection[i] {
 			continue
 		}
@@ -372,47 +380,46 @@ func (v *View) drawOverlays(screen *ebiten.Image, ctx *core.Ctx) {
 	}
 }
 
-// 폴리 트리거 점 수치(P5-poly). 감쇠율은 150ms(테스트 계약)에서 α < 0.1이 되는 값:
-// e^(−20·0.15) = e^−3 ≈ 0.0498.
+// 트리거 점 수치(P5-poly — 샘플러가 같은 관례를 공유한다). 감쇠율은 150ms(테스트 계약)에서
+// α < 0.1이 되는 값: e^(−20·0.15) = e^−3 ≈ 0.0498.
 const (
-	polyTrigR     = 4.0  // 점 반지름(px)
-	polyTrigInset = 10.0 // 이름판 오른쪽 끝에서 안쪽 오프셋(px)
-	polyTrigDecay = 20.0 // 지수 감쇠율(/초)
+	trigDotR     = 4.0  // 점 반지름(px)
+	trigDotInset = 10.0 // 이름판 오른쪽 끝에서 안쪽 오프셋(px)
+	trigDotDecay = 20.0 // 지수 감쇠율(/초)
 )
 
-// polyTrigA — 트리거 점 알파. 미점화(−1) 0, 점화 프레임 1, 이후 e^(−20·경과초).
+// trigDotA — 트리거 점 알파. 미점화(t<0) 0, 점화 프레임 1, 이후 e^(−20·경과초).
 // 순수 함수 — 단언 대상(점화·150ms 감쇠·미점화).
-func (v *View) polyTrigA(now float64) float32 {
-	if v.polyTrigT < 0 {
+func trigDotA(t, now float64) float32 {
+	if t < 0 {
 		return 0
 	}
-	e := now - v.polyTrigT
+	e := now - t
 	if e <= 0 {
 		return 1
 	}
-	return float32(math.Exp(-polyTrigDecay * e))
+	return float32(math.Exp(-trigDotDecay * e))
 }
 
-// drawPolyTrig — 폴리 이름판 오른쪽 끄트막의 트리거 점(코드 건반 반응 — §14.1 FlagPoly).
-// 점화 시각은 Update가 래치하고 여기선 감쇠만 계산한다. drawPadLED와 같은 계약: New에서
-// 만든 점 스프라이트(ledCircle r4, colLCD)를 ColorScale로 페이드 — 프리멀티플라이드 색에
-// 알파만 걸면 순색이 되므로 rgb도 함께 접는다(overlayRect 주석). 구 레이아웃(poly 판 없음)·
+// drawTrigDot — 섹션 이름판 오른쪽 끄트막의 트리거 점(폴리·샘플러 공용 — §14.1 FlagPoly·
+// FlagSampler). 점화 시각은 Update가 래치하고 여기선 감쇠만 계산한다. drawPadLED와 같은
+// 계약: New에서 만든 점 스프라이트(ledCircle r4, colLCD)를 ColorScale로 페이드 —
+// 프리멀티플라이드 색에 알파만 걸면 순색이 되므로 rgb도 함께 접는다(overlayRect 주석).
 // newView(테스트, 스프라이트 nil)는 미그림. α ≤ 1/255이면 DrawImage 생략(예산 절약).
-func (v *View) drawPolyTrig(dst *ebiten.Image, ctx *core.Ctx) {
-	if !v.hasSection[secPoly-2] || v.polyDotImg == nil {
+func (v *View) drawTrigDot(dst *ebiten.Image, now, t float64, r core.Rect) {
+	if v.trigDotImg == nil {
 		return
 	}
-	a := v.polyTrigA(ctx.Now)
+	a := trigDotA(t, now)
 	if a <= 1.0/255 {
 		return
 	}
-	r := v.sectionPlates[secPoly-2]
-	d := float64(v.polyDotImg.Bounds().Dx())
+	d := float64(v.trigDotImg.Bounds().Dx())
 	v.op.GeoM.Reset()
-	v.op.GeoM.Translate(r[0]+r[2]-polyTrigInset-d/2, r[1]+r[3]/2-d/2)
+	v.op.GeoM.Translate(r[0]+r[2]-trigDotInset-d/2, r[1]+r[3]/2-d/2)
 	v.op.ColorScale.Reset()
 	v.op.ColorScale.Scale(a, a, a, a)
-	dst.DrawImage(v.polyDotImg, &v.op)
+	dst.DrawImage(v.trigDotImg, &v.op)
 }
 
 // drawChordTrack — 코드 트랙 띠(§12.3). 보통 상태: 현재 마디 셀 colLEDMid 채움(텍스트 아래) +
@@ -473,9 +480,10 @@ func (v *View) overlayRect(screen *ebiten.Image, r core.Rect, tex *ebiten.Image,
 	screen.DrawImage(tex, &v.op)
 }
 
-// drawDisplays — 표시창 3개. 문자열이 변화했을 때만 오프스크린에 다시 찍는다.
+// drawDisplays — 표시창 4개. 문자열이 변화했을 때만 오프스크린에 다시 찍는다.
 // 베이스라인 2개는 페인팅 잔글자가 창 안에 남아 있어(패널 실측: 창 상단 ~10px에 녹색 잔흔)
 // 창색(colDispWin)을 불투명하게 깔고 그 위에 앱 폰트 텍스트만 올린다(2차 비전 처방).
+// 샘플러 팩 창(P5-sampler)도 같은 처방 — wire.py 표시창 채움(40,60,50)을 임시 창색으로.
 // 라인 미터 VU 띠는 이 캐시 밖(drawMeters) — 문자열과 무관하게 매 프레임 화면에 직접.
 func (v *View) drawDisplays(screen *ebiten.Image, ctx *core.Ctx) {
 	if ctx.Font == nil {
@@ -488,7 +496,15 @@ func (v *View) drawDisplays(screen *ebiten.Image, ctx *core.Ctx) {
 		v.blitDisplay(screen, ctx, s, v.dispRects[s], &v.disp[s].text, &v.disp[s].dirty, dispBassScale, colDispWin[s], labelFitPad)
 	}
 	v.blitDisplay(screen, ctx, 2, v.botRect, &v.bottom.text, &v.bottom.dirty, dispBottomScale, color.NRGBA{}, botDispPad)
+	if v.hasSmpDisp {
+		v.blitDisplay(screen, ctx, 3, v.smpDispRect, &v.smpDisp.text, &v.smpDisp.dirty, dispBassScale, colDispWinSmp, labelFitPad)
+	}
 }
+
+// colDispWinSmp — 샘플러 팩 슬롯 표시창 창색(P5-sampler). 패널은 아직 와이어프레임이라
+// wire.py 표시창 채움(40,60,50)을 임시로 쓴다 — 채색 병합 뒤 리드가 실측 중앙값으로
+// 재조정한다(colPlateBand poly·sampler 재핀 관례).
+var colDispWinSmp = color.NRGBA{40, 60, 50, 0xFF}
 
 func (v *View) blitDisplay(screen *ebiten.Image, ctx *core.Ctx, slot int, r core.Rect, text *string, dirty *bool, scale float64, bg color.NRGBA, pad float64) {
 	img := v.dispImg[slot]
@@ -508,10 +524,14 @@ func (v *View) blitDisplay(screen *ebiten.Image, ctx *core.Ctx, slot int, r core
 			// 텍스트 폭은 rect−pad 안으로 축소(2차 비전 처방 — 창 밖 넘침 방지).
 			// 하단 표시창은 botDispPad(8)로 더 좁게 — "Am 120 B3 BUILD"가 창에 맞는다(§12.3).
 			// 세로는 중앙에서 위로 — 라인 미터 띠(베이스 4px·하단 3px)와 겹치지 않게(P3-meters).
-			// slot별 오프셋: 공용 경로라 같이 올리면 하단(띠 3px)이 과하게 뜬다.
+			// slot별 오프셋: 공용 경로라 같이 올리면 하단(띠 3px)이 과하게 뜬다. 샘플러 팩 창
+			// (slot 3)엔 VU 띠가 없어 중앙 그대로.
 			dy := -vuTextDy
 			if slot == 2 {
 				dy = -vuTextDyBot
+			}
+			if slot == 3 {
+				dy = 0
 			}
 			sc := labelScale(ctx.Font, *text, scale, r[2]-pad)
 			ctx.Font.Draw(img, *text, r[2]/2, r[3]/2+dy, sc, colLCD, core.AlignCenter)
